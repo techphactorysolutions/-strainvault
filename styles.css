@@ -941,3 +941,64 @@ input[type="range"] {
     filter: none;
   }
 }
+
+.card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  position: relative;
+  z-index: 2;
+}
+
+.mini-btn {
+  min-height: 38px;
+  padding: 0 13px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.1);
+  border: 1px solid rgba(255,255,255,.16);
+  color: var(--text);
+  font-weight: 900;
+  font-size: .78rem;
+}
+
+.mini-btn.accent {
+  background: linear-gradient(135deg, rgba(82,242,139,.9), rgba(255,209,102,.85));
+  color: #07120b;
+}
+
+@media (max-width: 430px) {
+  .card-actions {
+    flex-direction: column;
+  }
+}
+
+
+.scanner-assist {
+  margin: 0 0 18px;
+  padding: 14px;
+  border-radius: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.075);
+}
+
+.scanner-assist strong,
+.scanner-assist small {
+  display: block;
+}
+
+.scanner-assist small {
+  color: var(--muted);
+  margin-top: 3px;
+  line-height: 1.35;
+}
+
+@media (max-width: 560px) {
+  .scanner-assist {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

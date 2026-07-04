@@ -35,3 +35,29 @@ StrainVault stores data locally in the browser using local storage/IndexedDB-sty
 ## Notes
 
 For GitHub Free, GitHub Pages is available for public repositories. Private repository Pages support depends on paid GitHub plans.
+
+## Version 2 fix notes
+
+- Fixed the empty-photo upload bug that could stop Save/Apply from working when no label or receipt image was selected.
+- Added a dedicated Add/Edit Strain flow.
+- Added Edit buttons for strain cards, journal sessions, and stash items.
+- Added cache-busting query strings for `app.js` and `styles.css` so GitHub Pages refreshes the new build more reliably.
+
+
+## Version 3 notes
+
+- Added scanner-assisted strain entry: label photo + local text parsing fills strain name, brand, product type, THC/CBD, terpenes, and notes.
+- Added an Apply to Strain Form button so scanned label details can prefill the full Add/Edit Strain form before saving.
+- Turned the vault into a shareable strain-card library. Each strain now has a Share card button that renders a PNG card.
+- Added Web Share API support where available, with Download PNG fallback.
+
+Note: the scanner stays local-first and does not use external OCR APIs or exposed API keys. On iPhone/iPad, use the label photo plus iOS Live Text/copy-paste when automatic photo OCR is unavailable.
+
+
+## Version 3.1 audit/fix notes
+
+- Hardened optional photo handling so an unsupported image format cannot block saving strain, session, or stash text details.
+- Fixed scanner text parsing for simple one-line labels like `Blue Dream, Flower, THC 24.6%, CBD 0.2%`.
+- Preserved scanner label photos when using **Apply to Strain Form**.
+- Improved **Log session** from a strain card so it prefills brand, type, THC/CBD, and terpenes from the saved strain card.
+- Added cache-busting query strings for GitHub Pages refresh reliability.

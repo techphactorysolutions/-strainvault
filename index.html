@@ -10,7 +10,7 @@
   <title>StrainVault — Private Cannabis Journal</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=31" />
 </head>
 <body>
   <div class="aurora aurora-one"></div>
@@ -83,9 +83,9 @@
       <div class="section-heading reveal">
         <div>
           <p class="eyebrow">vault</p>
-          <h2>Your strains</h2>
+          <h2>Shareable strain cards</h2>
         </div>
-        <button class="ghost-btn" data-action="open-log">Add</button>
+        <button class="ghost-btn" data-action="open-strain">Add strain</button>
       </div>
       <div class="search-row glass reveal">
         <input id="strainSearch" type="search" placeholder="Search strain, terpene, effect..." />
@@ -133,7 +133,7 @@
       </div>
       <div class="section-card glass reveal">
         <h3>Paste label text</h3>
-        <p class="muted">For now, paste any text from the label and StrainVault will pull obvious THC, CBD, strain, and terpene clues locally.</p>
+        <p class="muted">Take or upload the label photo, then paste label text or use iPhone Live Text to copy text from the package. StrainVault parses the details locally and can fill the strain form for review.</p>
         <textarea id="labelText" class="glass-textarea" placeholder="Example: Blue Dream, Flower, THC 24.6%, CBD 0.2%, Terpenes: Myrcene, Limonene, Pinene"></textarea>
         <button id="parseLabelBtn" class="primary-btn full">Create draft from label</button>
       </div>
@@ -254,6 +254,42 @@
     </form>
   </section>
 
+  <section id="strainModal" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="strainTitle">
+    <div class="sheet-handle"></div>
+    <div class="sheet-head">
+      <div>
+        <p class="eyebrow">strain card</p>
+        <h2 id="strainTitle">Add strain</h2>
+      </div>
+      <button class="close-btn" data-close="strainModal" aria-label="Close">×</button>
+    </div>
+    <div class="scanner-assist glass">
+      <div>
+        <strong>Label scanner assist</strong>
+        <small>Use a package label to fill strain, THC/CBD, terpenes, brand, and type.</small>
+        <small id="strainScannerStatus" class="muted">Optional: use scanner assist to fill this card from package text.</small>
+      </div>
+      <button class="mini-btn accent" type="button" data-action="open-scan-fill">Scan label</button>
+    </div>
+    <form id="strainForm" class="flow-form">
+      <input name="id" type="hidden" />
+      <div class="form-grid">
+        <label>Strain name<input name="name" required placeholder="Blue Dream" /></label>
+        <label>Brand / grower<input name="brand" placeholder="Optional" /></label>
+        <label>Product type<select name="type"><option>Flower</option><option>Cart</option><option>Edible</option><option>Concentrate</option><option>Pre-roll</option><option>Tincture</option></select></label>
+        <label>THC %<input name="thc" type="number" min="0" max="100" step="0.1" placeholder="24.5" /></label>
+        <label>CBD %<input name="cbd" type="number" min="0" max="100" step="0.1" placeholder="0.3" /></label>
+        <label>Top terpenes<input name="terpenes" placeholder="Myrcene, Limonene" /></label>
+      </div>
+      <label>Personal notes<textarea name="notes" placeholder="Flavor, smell, body feel, who grew it, or anything you want attached to this strain card..."></textarea></label>
+      <label class="photo-picker">Label photo<input name="labelPhoto" type="file" accept="image/*" capture="environment" /></label>
+      <div class="button-row wrap">
+        <button id="strainSaveBtn" class="primary-btn" type="submit">Save strain</button>
+        <button id="strainDeleteBtn" class="ghost-btn danger hidden" type="button">Delete</button>
+      </div>
+    </form>
+  </section>
+
   <section id="stashModal" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="stashTitle">
     <div class="sheet-handle"></div>
     <div class="sheet-head">
@@ -275,6 +311,23 @@
     </form>
   </section>
 
+  <section id="strainShareModal" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="strainShareTitle">
+    <div class="sheet-handle"></div>
+    <div class="sheet-head">
+      <div>
+        <p class="eyebrow">library card</p>
+        <h2 id="strainShareTitle">Share strain card</h2>
+      </div>
+      <button class="close-btn" data-close="strainShareModal" aria-label="Close">×</button>
+    </div>
+    <canvas id="strainCanvas" width="1080" height="1350" class="profile-canvas"></canvas>
+    <div class="button-row wrap">
+      <button id="renderStrainCardBtn" class="primary-btn">Refresh card</button>
+      <button id="shareStrainCardBtn" class="ghost-btn">Share PNG</button>
+      <a id="downloadStrainCardLink" class="ghost-btn" download="strainvault-strain-card.png">Download PNG</a>
+    </div>
+  </section>
+
   <section id="exportModal" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="exportTitle">
     <div class="sheet-handle"></div>
     <div class="sheet-head">
@@ -293,6 +346,6 @@
 
   <div id="toast" class="toast hidden"></div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=31"></script>
 </body>
 </html>
