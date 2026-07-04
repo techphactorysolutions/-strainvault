@@ -51,7 +51,7 @@ For GitHub Free, GitHub Pages is available for public repositories. Private repo
 - Turned the vault into a shareable strain-card library. Each strain now has a Share card button that renders a PNG card.
 - Added Web Share API support where available, with Download PNG fallback.
 
-Note: the scanner stays local-first and does not use external OCR APIs or exposed API keys. v3.2 can load an open-source browser OCR library from a CDN when you tap **Read label photo**; the package image is processed in the browser. If the OCR library cannot load or cannot read the label, use iPhone/iPad Live Text to copy the label text and paste it into the app.
+Note: the scanner stays local-first and does not use external OCR APIs or exposed API keys. v3.4 can load an open-source browser OCR library from a CDN when you tap **Read label photo**; the package image is processed in the browser. If the OCR library cannot load or cannot read the label, use iPhone/iPad Live Text to copy the label text and paste it into the app.
 
 
 ## Version 3.1 audit/fix notes
@@ -63,7 +63,16 @@ Note: the scanner stays local-first and does not use external OCR APIs or expose
 - Added cache-busting query strings for GitHub Pages refresh reliability.
 
 
-## v3.2 Scanner Fix
+## v3.4 Scanner Fix
 - Adds Read label photo workflow with browser OCR fallback.
 - Prevents empty photo uploads from creating Untitled strain drafts.
 - Improves scanner status messages and strain-name parsing.
+
+## v3.4 Advanced Label Capture Fix
+
+- Runs multiple OCR passes: cropped white test label, high-contrast cannabinoid table, package/logo area, full photo, top brand area, and inverted fallback.
+- Improves brand detection with common cannabis-brand matching and better `grown by / packaged by / manufactured by` parsing.
+- Improves THC/CBD detection from cannabis lab-table formats, including `THCA`, `Δ9 THC`, `CBDA`, `Total THC`, `Total CBD`, and `Total Cannabinoids`.
+- Calculates Total THC/CBD from acid forms when the label does not explicitly show totals.
+- Shows missing scanner fields clearly so the user can correct only what OCR could not read.
+- Updates GitHub Pages cache busting to `v=34`.

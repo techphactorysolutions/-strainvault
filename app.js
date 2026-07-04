@@ -25,7 +25,7 @@ function getStorage() {
 const localStore = getStorage();
 
 const DEFAULT_STATE = {
-  version: 32,
+  version: 34,
   createdAt: new Date().toISOString(),
   strains: [],
   sessions: [],
@@ -900,6 +900,20 @@ async function tryNativeTextDetector() {
   }
 }
 
+function scannerDraftMissingFields(draft = {}) {
+  return [
+    draft.strainName ? '' : 'strain name',
+    draft.brand ? '' : 'brand',
+    draft.thc ? '' : 'THC',
+    draft.cbd ? '' : 'CBD'
+  ].filter(Boolean);
+}
+
+function scannerDraftHasCoreFields(draft = {}) {
+  const missing = scannerDraftMissingFields(draft);
+  return !missing.length && (draft.confidence || 0) >= 70;
+}
+
 async function runOcrOnScanImage() {
   if (!lastScanImage) {
     toast('Take or upload a label photo first.');
@@ -908,37 +922,61 @@ async function runOcrOnScanImage() {
   if (ocrBusy) return;
   ocrBusy = true;
   setScanButtonsEnabled(true);
-  setOcrStatus('Reading label photo… keep this page open.');
+  setOcrStatus('Reading label photo… keep this page open. Close, bright label photos work best.');
   try {
-    let text = await tryNativeTextDetector();
-    if (!text) {
-      setOcrStatus('Loading local OCR reader… first scan may take a moment.');
-      const Tesseract = await loadOcrEngine();
-      const result = await Tesseract.recognize(lastScanImage, 'eng', {
+    const texts = [];
+    let nativeText = await tryNativeTextDetector();
+    if (nativeText) texts.push(nativeText);
+
+    let combinedDraft = parseLabelText(combineOcrTexts(texts));
+    const variants = await createOcrVariants(lastScanImage);
+
+    setOcrStatus('Loading OCR reader… first scan may take a moment.');
+    const Tesseract = await loadOcrEngine();
+
+    for (let index = 0; index < variants.length; index += 1) {
+      const variant = variants[index];
+      const currentMissing = scannerDraftMissingFields(combinedDraft);
+      const missingText = currentMissing.length ? ` Missing: ${currentMissing.join(', ')}.` : '';
+      setOcrStatus(`Reading ${variant.name}…${missingText}`);
+      const result = await Tesseract.recognize(variant.src, 'eng', {
         logger: progress => {
           if (progress?.status === 'recognizing text' && Number.isFinite(progress.progress)) {
-            setOcrStatus(`Reading label photo… ${Math.round(progress.progress * 100)}%`);
+            setOcrStatus(`Reading ${variant.name}… ${Math.round(progress.progress * 100)}%`);
           } else if (progress?.status) {
             setOcrStatus(`${capitalize(progress.status)}…`);
           }
-        }
+        },
+        preserve_interword_spaces: '1',
+        tessedit_pageseg_mode: index <= 2 ? '6' : '11'
       });
-      text = result?.data?.text || '';
+      const text = result?.data?.text || '';
+      if (text) texts.push(text);
+      combinedDraft = parseLabelText(combineOcrTexts(texts));
+
+      // Do not stop until the full-photo/top-logo passes have had a chance to capture the brand.
+      if (scannerDraftHasCoreFields(combinedDraft) && index >= 2) break;
     }
-    text = String(text || '').trim();
+
+    const text = combineOcrTexts(texts);
     if (!text) {
-      setOcrStatus('Could not read the label. Try a closer, brighter photo or paste text with iPhone Live Text.');
+      setOcrStatus('Could not read the label. Try a closer, brighter photo of only the white label, or paste text with iPhone Live Text.');
       toast('Could not read the label text.');
       return;
     }
     $('#labelText').value = text;
     const draft = parseLabelText(text);
     renderScanDraft(draft);
-    setOcrStatus(draft.strainName ? 'Label text detected. Review the draft before saving.' : 'Label text detected, but strain name needs review. Add the name before saving.');
-    toast('Label text read. Review the draft.');
+    const missing = scannerDraftMissingFields(draft);
+    if (missing.length) {
+      setOcrStatus(`Label read with ${draft.confidence || 0}% confidence. Review missing: ${missing.join(', ')}. Brand logos may need manual correction.`);
+    } else {
+      setOcrStatus(`Label read with ${draft.confidence || 0}% confidence. Review and save the strain card.`);
+    }
+    toast('Label read. Review the auto-filled bud info.');
   } catch (error) {
     console.error(error);
-    setOcrStatus('Photo OCR failed. You can still use iPhone Live Text: open the photo, copy the label text, paste it here, then create a draft.');
+    setOcrStatus('Photo OCR failed. Try a closer crop of the white label, or use iPhone Live Text to copy the label text and paste it here.');
     toast('Scanner could not read the photo. Paste label text instead.');
   } finally {
     ocrBusy = false;
@@ -946,90 +984,606 @@ async function runOcrOnScanImage() {
   }
 }
 
+
 function cleanLabelValue(value = '') {
   return String(value || '')
     .replace(/^[#:\-\s]+/, '')
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
     .replace(/\s{2,}/g, ' ')
+    .replace(/^[.,;:\-\s]+|[.,;:\-\s]+$/g, '')
     .trim();
 }
 
-function extractField(all, labels) {
-  const escaped = labels.map(label => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const match = all.match(new RegExp(`(?:${escaped})\\s*[:#-]?\\s*([^\\n,|]+)`, 'i'));
-  return cleanLabelValue(match?.[1] || '');
+function normalizeOcrText(text = '') {
+  return String(text || '')
+    .replace(/\r/g, '\n')
+    .replace(/[|¦]/g, '\n')
+    .replace(/[’‘]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[∆△]/g, 'Δ')
+    .replace(/[®™]/g, '')
+    .replace(/\bT\s*[H#]\s*C\b/gi, 'THC')
+    .replace(/\bT\s*[H#]\s*C\s*A\b/gi, 'THCA')
+    .replace(/\bC\s*[B8]\s*D\b/gi, 'CBD')
+    .replace(/\bC\s*[B8]\s*D\s*A\b/gi, 'CBDA')
+    .replace(/\bC\s*[B8]\s*G\b/gi, 'CBG')
+    .replace(/\bC\s*[B8]\s*N\b/gi, 'CBN')
+    .replace(/\bT0TAL\b/gi, 'TOTAL')
+    .replace(/\bTotaI\b/g, 'Total')
+    .replace(/\bTotai\b/g, 'Total')
+    .replace(/\bCannabinolds?\b/gi, 'Cannabinoids')
+    .replace(/\bCannabinoids?\b/gi, match => match.toLowerCase().startsWith('cannabinoid') ? 'Cannabinoids' : match)
+    .replace(/\bD(?:elta)?\s*[- ]?9\b/gi, 'Δ9')
+    .replace(/\bDelta\s*[- ]?Nine\b/gi, 'Δ9')
+    .replace(/\s*%/g, '%')
+    .replace(/(THC|CBD|THCA|CBDA|CBG|CBN|CBC)(\d)/gi, '$1 $2')
+    .replace(/(Total THC|Total CBD|Total Cannabinoids|Total Terpenes)(\d)/gi, '$1 $2')
+    .replace(/(\d),(\d)/g, '$1.$2')
+    .replace(/\n{3,}/g, '\n\n');
+}
+
+function escapeRegex(value = '') {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getCleanLines(text = '') {
+  return normalizeOcrText(text)
+    .split(/\n|\r|•|·|;/)
+    .map(line => cleanLabelValue(line))
+    .filter(Boolean);
+}
+
+function getSegments(text = '') {
+  return normalizeOcrText(text)
+    .split(/\n|\r|,|•|·|;|\t/)
+    .map(line => cleanLabelValue(line))
+    .filter(Boolean);
+}
+
+function compactOcrText(text = '') {
+  return normalizeOcrText(text)
+    .replace(/\s+/g, ' ')
+    .replace(/\bTHC A\b/gi, 'THCA')
+    .replace(/\bCBD A\b/gi, 'CBDA')
+    .trim();
+}
+
+function extractField(all, labels, maxLength = 90) {
+  const source = normalizeOcrText(all);
+  for (const label of labels) {
+    const escaped = escapeRegex(label);
+    const patterns = [
+      new RegExp(`(?:^|\\n|\\b)${escaped}\\s*(?:name)?\\s*[:#\\-]?\\s*([^\\n]{2,${maxLength}})`, 'i'),
+      new RegExp(`(?:^|\\n|\\b)${escaped}\\s+(?:is|by|as)\\s+([^\\n]{2,${maxLength}})`, 'i')
+    ];
+    for (const regex of patterns) {
+      const match = source.match(regex);
+      const value = cleanLabelValue(match?.[1] || '')
+        .replace(/\s+(THC|CBD|Total|Batch|Lot|Pkg|Package|Harvest|Tested|Warning)\b.*$/i, '');
+      if (value && !/^[:#\-]+$/.test(value)) return value.slice(0, maxLength).trim();
+    }
+  }
+  return '';
+}
+
+function normalizePercent(value) {
+  const number = Number(String(value || '').replace(/[^0-9.]/g, ''));
+  if (!Number.isFinite(number) || number < 0) return '';
+  const adjusted = number > 100 && number < 1000 ? number / 10 : number;
+  if (adjusted > 100) return '';
+  return adjusted.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+}
+
+function linePercentValue(line = '', labelRegexes = []) {
+  const normalized = compactOcrText(line);
+  if (!labelRegexes.some(regex => regex.test(normalized))) return '';
+  const matchWithPercent = [...normalized.matchAll(/(\d{1,3}(?:\.\d{1,3})?)\s*(?:%|percent)\b/gi)]
+    .map(match => normalizePercent(match[1]))
+    .filter(Boolean);
+  if (matchWithPercent.length) return matchWithPercent[matchWithPercent.length - 1];
+
+  const tokens = [...normalized.matchAll(/(?<!\d)(\d{1,3}(?:\.\d{1,3})?)(?!\d)/g)]
+    .map(match => ({ value: normalizePercent(match[1]), raw: match[1], index: match.index || 0 }))
+    .filter(item => item.value);
+  if (!tokens.length) return '';
+  // Cannabis COA tables often read as: THCA 239.44 23.944. The last <=100 value is usually the percent column.
+  const percentLike = tokens.filter(item => Number(item.value) <= 100 && !/^(19|20)\d{2}$/.test(item.raw));
+  return percentLike.length ? percentLike[percentLike.length - 1].value : '';
+}
+
+function labelWindowValue(all, labelRegexes = [], options = {}) {
+  const source = compactOcrText(all);
+  const windowSize = options.windowSize || 96;
+  for (const regex of labelRegexes) {
+    const match = source.match(regex);
+    if (!match) continue;
+    const index = match.index || 0;
+    const windowText = source.slice(index, index + windowSize);
+    const percentMatch = windowText.match(/(\d{1,3}(?:\.\d{1,3})?)\s*(?:%|percent)\b/i);
+    const percent = normalizePercent(percentMatch?.[1]);
+    if (percent) return percent;
+    const numberMatch = windowText.match(/\b(\d{1,3}(?:\.\d{1,3})?)\b/);
+    const number = normalizePercent(numberMatch?.[1]);
+    if (number) return number;
+  }
+  return '';
+}
+
+function percentNearLabel(all, labelPatterns, options = {}) {
+  const source = normalizeOcrText(all);
+  const lines = getCleanLines(source);
+  const regexes = labelPatterns.map(pattern => typeof pattern === 'string' ? new RegExp(escapeRegex(pattern), 'i') : pattern);
+  if (!regexes.some(regex => regex.test(source))) return '';
+
+  for (const line of lines) {
+    const value = linePercentValue(line, regexes);
+    if (value) return value;
+  }
+
+  const compact = compactOcrText(source);
+  const windowSize = options.windowSize || 90;
+  for (const regex of regexes) {
+    const label = regex.source;
+    const forward = new RegExp(`(?:${label})[^0-9%]{0,${windowSize}}(\\d{1,3}(?:\\.\\d{1,3})?)\\s*(?:%|percent)?`, 'i');
+    const forwardMatch = compact.match(forward);
+    const forwardValue = normalizePercent(forwardMatch?.[1]);
+    if (forwardValue) return forwardValue;
+
+    const reverse = new RegExp(`(\\d{1,3}(?:\\.\\d{1,3})?)\\s*(?:%|percent)?[^A-Za-z0-9]{0,${windowSize}}(?:${label})`, 'i');
+    const reverseMatch = compact.match(reverse);
+    const reverseValue = normalizePercent(reverseMatch?.[1]);
+    if (reverseValue) return reverseValue;
+  }
+
+  return labelWindowValue(compact, regexes, { windowSize });
 }
 
 function extractPercent(all, labels) {
-  const escaped = labels.map(label => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const match = all.match(new RegExp(`(?:${escaped})\\s*[:#-]?\\s*(\\d+(?:\\.\\d+)?)\\s*%?`, 'i'));
-  return match?.[1] || '';
+  return percentNearLabel(all, labels.map(label => new RegExp(escapeRegex(label), 'i')));
 }
 
-function normalizeScannedName(value = '') {
+function numberValue(value) {
+  const parsed = Number(normalizePercent(value));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function sumCannabinoids(values = []) {
+  const total = values.reduce((sum, value) => sum + numberValue(value), 0);
+  if (!total) return '';
+  return total.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+}
+
+function deriveTotalThc(profile = {}) {
+  if (profile['Total THC']) return profile['Total THC'];
+  const thca = numberValue(profile.THCA);
+  const d9 = numberValue(profile['Δ9 THC'] || profile.THC);
+  if (thca || d9) return normalizePercent((thca * 0.877 + d9).toFixed(2));
+  return '';
+}
+
+function deriveTotalCbd(profile = {}) {
+  if (profile['Total CBD']) return profile['Total CBD'];
+  const cbda = numberValue(profile.CBDA);
+  const cbd = numberValue(profile.CBD);
+  if (cbda || cbd) return normalizePercent((cbda * 0.877 + cbd).toFixed(2));
+  return '';
+}
+
+function extractCannabinoidProfile(all) {
+  const normalized = normalizeOcrText(all);
+  const profile = {};
+  const patterns = [
+    ['Total THC', [/total\s+(?:active\s+|potential\s+)?thc/i, /thc\s+total/i, /total\s+delta\s*9\s*thc/i]],
+    ['Δ9 THC', [/(?:delta\s*9|d9|Δ9)[\s\-]*(?:thc|tetrahydrocannabinol)/i]],
+    ['THCA', [/thc[\s\-]*a\b/i, /\bthca\b/i]],
+    ['Total CBD', [/total\s+cbd/i, /cbd\s+total/i]],
+    ['CBD', [/\bcbd\b(?!\s*a)/i]],
+    ['CBDA', [/cbd[\s\-]*a\b/i, /\bcbda\b/i]],
+    ['CBG', [/\bcbg\b(?!\s*a)/i]],
+    ['CBGA', [/\bcbga\b/i, /cbg[\s\-]*a\b/i]],
+    ['CBN', [/\bcbn\b/i]],
+    ['CBC', [/\bcbc\b/i]],
+    ['Total Cannabinoids', [/total\s+cannabinoids?/i, /total\s+active\s+cannabinoids?/i, /total\s+cannabinoid\s+content/i, /tac\b/i]]
+  ];
+  for (const [name, regexes] of patterns) {
+    const value = percentNearLabel(normalized, regexes, { windowSize: 110 });
+    if (value) profile[name] = value;
+  }
+  if (!profile['Total THC']) {
+    const derived = deriveTotalThc(profile);
+    if (derived) profile['Total THC'] = derived;
+  }
+  if (!profile['Total CBD']) {
+    const derived = deriveTotalCbd(profile);
+    if (derived) profile['Total CBD'] = derived;
+  }
+  if (!profile['Total Cannabinoids']) {
+    const sum = sumCannabinoids([profile['Total THC'], profile['Total CBD'], profile.CBG, profile.CBN, profile.CBC]);
+    if (sum) profile['Total Cannabinoids'] = sum;
+  }
+  return profile;
+}
+
+function extractDetailValue(all, labels, maxLength = 80) {
+  const value = extractField(all, labels, maxLength);
   return cleanLabelValue(value)
-    .replace(/\b(cannabis|marijuana|flower|buds?|premium|indica|sativa|hybrid|pre[- ]?roll|preroll|cartridge|vape|concentrate)\b/ig, '')
-    .replace(/\s{2,}/g, ' ')
-    .replace(/[.,;:-]+$/g, '')
+    .replace(/\s+(THC|CBD|Total|Terpene|Cannabinoid)\b.*$/i, '')
+    .slice(0, maxLength)
     .trim();
 }
 
-function extractAfterKeyword(text, keywords) {
-  const escaped = keywords.map(label => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const regex = new RegExp(`(?:${escaped})\\s*[:#-]?\\s*([^\\n|;,]+)`, 'i');
-  const match = text.match(regex);
-  return cleanLabelValue(match?.[1] || '');
-}
-
-function parseLabelText(text) {
-  const raw = String(text || '').trim();
-  const all = raw.replace(/\r/g, '\n');
-  const lines = all.split(/\n|\|/).map(line => cleanLabelValue(line)).filter(Boolean);
-  const segments = all
-    .split(/\n|\||,|;|•|·/)
-    .map(line => cleanLabelValue(line))
-    .filter(Boolean);
-
-  const thc = extractPercent(all, ['Total THC', 'THC Total', 'THC', 'Delta 9 THC', 'D9 THC', 'THCA']);
-  const cbd = extractPercent(all, ['Total CBD', 'CBD Total', 'CBD', 'CBDA']);
-  const brand = extractField(all, ['Brand', 'Grower', 'Cultivator', 'Producer', 'Manufacturer', 'Made by', 'Grown by', 'Distributed by', 'Dispensary']) || '';
-  const namedStrain = extractAfterKeyword(all, ['Strain Name', 'Strain', 'Product Name', 'Product', 'Cultivar', 'Item Name', 'Name']);
-  const typeMatch = all.match(/\b(Flower|Bud|Buds|Cart|Cartridge|Vape|Edible|Gummy|Concentrate|Wax|Rosin|Resin|Pre[- ]?roll|Preroll|Tincture)\b/i)?.[1] || 'Flower';
-  const commonTerpenes = ['myrcene','limonene','caryophyllene','beta-caryophyllene','pinene','alpha-pinene','linalool','humulene','terpinolene','ocimene','bisabolol','camphene','eucalyptol','nerolidol','terpineol','guaiol'];
-  const terpeneLine = all.match(/Terpenes?\s*[:#-]?\s*([^\n]+)/i)?.[1] || '';
-  const foundTerpenes = commonTerpenes.filter(terp => new RegExp(`\\b${terp.replace('-', '[- ]?')}\\b`, 'i').test(all)).map(t => capitalize(t.replace(/^beta-|^alpha-/i, '').replace('-', ' ')));
-  const terpenes = uniqueList([...parseList(terpeneLine), ...foundTerpenes]).join(', ');
-
-  const blocked = /(THC|CBD|CBG|CBN|Terpene|Batch|Package|Warning|Cannabinoid|Total|Net Wt|License|Testing|Harvest|Manufactured|Ingredients|Use by|UID|Item #|Adult|Government|Activation|Serving|Dose|MG\b|%|\d+\.\d+|Lab|Patient|METRC|Lot|Expiration|Exp\b|Date|Weight|Net)/i;
-  const typeOnly = /^(Flower|Bud|Buds|Cart|Cartridge|Vape|Edible|Gummy|Concentrate|Wax|Rosin|Resin|Pre[- ]?roll|Preroll|Tincture)$/i;
-  const candidates = [...segments, ...lines]
-    .map(line => normalizeScannedName(line.replace(/^(strain|product|cultivar|item name|name)\s*[:#-]?\s*/i, '')))
-    .filter(line => line.length >= 3 && line.length <= 60 && !blocked.test(line) && !typeOnly.test(line));
-
-  const likelyName = candidates.find(line => /[A-Za-z]{3,}/.test(line)) || '';
-  const strainCandidate = normalizeScannedName(namedStrain) || likelyName;
-  const type = /cart|cartridge|vape/i.test(typeMatch) ? 'Cart'
+function detectProductType(all) {
+  const value = normalizeOcrText(all);
+  const typeMatch = value.match(/\b(Cannabis\s+Flower|Flower|Bud|Buds|Cart|Cartridge|Vape|Edible|Gummy|Concentrate|Wax|Rosin|Resin|Pre[- ]?roll|Preroll|Tincture)\b/i)?.[1] || 'Flower';
+  return /cart|cartridge|vape/i.test(typeMatch) ? 'Cart'
     : /pre/i.test(typeMatch) ? 'Pre-roll'
     : /edible|gummy/i.test(typeMatch) ? 'Edible'
     : /wax|rosin|resin|concentrate/i.test(typeMatch) ? 'Concentrate'
     : /tincture/i.test(typeMatch) ? 'Tincture'
     : 'Flower';
+}
 
-  const notesParts = [];
-  const batch = extractAfterKeyword(all, ['Batch', 'Batch ID', 'Lot', 'Lot ID']);
-  const packageDate = extractAfterKeyword(all, ['Package Date', 'Packaged', 'Pkg Date']);
-  if (batch) notesParts.push(`Batch: ${batch}`);
-  if (packageDate) notesParts.push(`Package date: ${packageDate}`);
-  notesParts.push(raw ? 'Created from label scanner assist.' : '');
+function normalizeScannedName(value = '') {
+  return cleanLabelValue(value)
+    .replace(/\b(cannabis|marijuana|flower|buds?|premium|indica|sativa|hybrid|pre[- ]?roll|preroll|cartridge|vape|concentrate|test(ed)?|label|package|product|strain|cultivar)\b/ig, '')
+    .replace(/\b\d+(?:\.\d+)?\s*(?:g|gram|mg|oz|%)\b/ig, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^[.,;:\-\s]+|[.,;:\-\s]+$/g, '')
+    .trim();
+}
 
-  return {
-    strainName: cleanLabelValue(strainCandidate).slice(0, 60),
-    brand,
-    type,
+function extractAfterKeyword(text, keywords) {
+  const source = normalizeOcrText(text);
+  for (const keyword of keywords) {
+    const escaped = escapeRegex(keyword);
+    const regexes = [
+      new RegExp(`(?:^|\\n|\\b)${escaped}\\s*[:#\\-]?\\s*([^\\n|;,]{2,90})`, 'i'),
+      new RegExp(`(?:^|\\n|\\b)${escaped}\\s+(?:name|type)?\\s*[:#\\-]?\\s*([^\\n|;,]{2,90})`, 'i')
+    ];
+    for (const regex of regexes) {
+      const match = source.match(regex);
+      const value = cleanLabelValue(match?.[1] || '').replace(/\s+(THC|CBD|Total|Batch|Lot|Pkg|Package|Harvest|Tested)\b.*$/i, '');
+      if (value) return value;
+    }
+  }
+  return '';
+}
+
+const KNOWN_CANNABIS_BRANDS = [
+  'Amaze', 'Blue Arrow', 'C4', 'CAMP', 'Cloud Cover', 'Codes', 'Elevate', 'Flora Farms',
+  'Good Day Farm', 'Greenlight', 'Heartland Labs', 'Illicit', 'Local Cannabis Co', 'Proper',
+  'Robust', 'Sinse', 'Sundro', 'Vertical', 'Vibe', 'Vivid', 'Bloom', 'Daybreak', 'GOAT',
+  'Farmer G', 'Smokey River', 'Sublime', 'Safe Bet', 'Nugz', 'Head Change', 'Revolution'
+];
+
+function matchKnownBrand(all) {
+  const compact = ` ${compactOcrText(all).replace(/[^A-Za-z0-9]+/g, ' ')} `;
+  for (const brand of KNOWN_CANNABIS_BRANDS) {
+    const brandRegex = new RegExp(`\\b${brand.split(/\s+/).map(escapeRegex).join('\\s+')}\\b`, 'i');
+    if (brandRegex.test(compact)) return brand;
+  }
+  return '';
+}
+
+function isBadBrandCandidate(line = '') {
+  return !line
+    || line.length < 2
+    || line.length > 48
+    || /\d{2,}|%|THC|CBD|CBG|CBN|CBC|Batch|Lot|Net|Wt|Weight|Warning|Government|Marijuana|Cannabis|Flower|Indica|Sativa|Hybrid|Adult|Keep|Reach|Children|License|Patient|Dispensary|Package|Serving|UID|QR|Code|Use|Testing|Lab|Ingredients|Terpene|Cannabinoid|Total/i.test(line);
+}
+
+function extractBrand(all) {
+  const known = matchKnownBrand(all);
+  if (known) return known;
+
+  const explicit = extractField(all, [
+    'Brand', 'Grower', 'Cultivator', 'Cultivated by', 'Grown by', 'Producer', 'Produced by',
+    'Manufacturer', 'Manufactured by', 'Mfg by', 'Processor', 'Processed by', 'Packaged by',
+    'Distributed by', 'Licensee', 'Facility', 'Company', 'Vendor', 'Supplier'
+  ], 70);
+  if (explicit && !isBadBrandCandidate(explicit)) return explicit;
+
+  const lines = getCleanLines(all);
+  const byLine = lines.find(line => /\b(?:cultivated|grown|manufactured|produced|processed|packaged|distributed|sold|provided)\s+by\b/i.test(line));
+  if (byLine) {
+    const value = cleanLabelValue(byLine.replace(/^.*?\bby\b\s*/i, ''));
+    if (!isBadBrandCandidate(value)) return value;
+  }
+
+  const topCandidates = lines.slice(0, 10)
+    .map(line => cleanLabelValue(line.replace(/[^A-Za-z0-9&' .\-]/g, '')))
+    .filter(line => !isBadBrandCandidate(line) && /[A-Za-z]{2,}/.test(line));
+  return topCandidates[0] || '';
+}
+
+function isBadNameCandidate(line = '') {
+  return !line
+    || line.length < 3
+    || line.length > 68
+    || /^(Flower|Bud|Buds|Cart|Cartridge|Vape|Edible|Gummy|Concentrate|Wax|Rosin|Resin|Pre[- ]?roll|Preroll|Tincture)$/i.test(line)
+    || /THC|CBD|CBG|CBN|CBC|Terpene|Batch|Package|Warning|Cannabinoid|Total|Net Wt|Net Weight|License|Testing|Harvest|Manufactured|Ingredients|Use by|UID|Item #|Adult|Government|Activation|Serving|Dose|MG\b|%|\d+\.\d+|Lab|Patient|METRC|Lot|Expiration|Exp\b|Date|Weight|Marijuana|Keep out|QR|Instructions|Registry|Facility/i.test(line);
+}
+
+function extractStrainName(all) {
+  const source = normalizeOcrText(all);
+  const explicit = extractAfterKeyword(source, ['Strain Name', 'Strain', 'Product Name', 'Product', 'Cultivar', 'Item Name', 'Item', 'Name']);
+  const cleanedExplicit = normalizeScannedName(explicit);
+  if (cleanedExplicit && !isBadNameCandidate(cleanedExplicit)) return cleanedExplicit;
+
+  const productLine = getCleanLines(source).find(line => /\b(cannabis\s+flower|flower|pre[- ]?roll|cartridge|vape|concentrate)\b/i.test(line) && !/%|THC|CBD/i.test(line));
+  if (productLine) {
+    const beforeType = normalizeScannedName(productLine.replace(/\b(cannabis\s+flower|flower|pre[- ]?roll|cartridge|vape|concentrate).*$/i, ''));
+    if (beforeType && !matchKnownBrand(beforeType) && !isBadNameCandidate(beforeType)) return beforeType;
+  }
+
+  const candidates = [...getSegments(source), ...getCleanLines(source)]
+    .map(line => normalizeScannedName(line.replace(/^(strain|product|cultivar|item name|name)\s*[:#\-]?\s*/i, '')))
+    .filter(line => /[A-Za-z]{3,}/.test(line) && !matchKnownBrand(line) && !isBadNameCandidate(line));
+
+  candidates.sort((a, b) => {
+    const aWords = a.split(/\s+/).length;
+    const bWords = b.split(/\s+/).length;
+    const aScore = (aWords >= 2 ? 2 : 0) + (/^[A-Z][a-z]/.test(a) ? 1 : 0) - (/^[A-Z\s]+$/.test(a) ? 1 : 0);
+    const bScore = (bWords >= 2 ? 2 : 0) + (/^[A-Z][a-z]/.test(b) ? 1 : 0) - (/^[A-Z\s]+$/.test(b) ? 1 : 0);
+    return bScore - aScore;
+  });
+  return candidates[0] || '';
+}
+
+function extractTerpenes(all) {
+  const source = normalizeOcrText(all);
+  const commonTerpenes = [
+    'myrcene','limonene','caryophyllene','beta-caryophyllene','b-caryophyllene','pinene','alpha-pinene','a-pinene',
+    'beta-pinene','b-pinene','linalool','humulene','terpinolene','ocimene','bisabolol','camphene','eucalyptol',
+    'nerolidol','terpineol','guaiol','valencene','phytol','fenchol','borneol','geraniol','pulegone'
+  ];
+  const terpeneLine = source.match(/Terpenes?\s*[:#\-]?\s*([^\n]+)/i)?.[1] || '';
+  const found = commonTerpenes.filter(terp => new RegExp(`\\b${escapeRegex(terp).replace(/\\-/g, '[- ]?')}\\b`, 'i').test(source));
+  const explicit = commonTerpenes.some(terp => new RegExp(`\\b${escapeRegex(terp).replace(/\\-/g, '[- ]?')}\\b`, 'i').test(terpeneLine)) ? parseList(terpeneLine) : [];
+  const pretty = found.map(t => capitalize(t.replace(/^b-/i, 'Beta ').replace(/^a-/i, 'Alpha ').replace(/^beta-/i, 'Beta ').replace(/^alpha-/i, 'Alpha ').replace('-', ' ')));
+  return uniqueList([...explicit, ...pretty]).join(', ');
+}
+
+function extractLabelDetails(all) {
+  const cannabinoidProfile = extractCannabinoidProfile(all);
+  const details = {
+    cannabinoids: cannabinoidProfile,
+    totalTerpenes: percentNearLabel(all, [/total\s+terpenes?/i, /terpenes?\s+total/i]),
+    netWeight: extractDetailValue(all, ['Net Weight', 'Net Wt', 'Net Wt.', 'Weight'], 50),
+    batch: extractDetailValue(all, ['Batch ID', 'Batch #', 'Batch', 'Lot ID', 'Lot #', 'Lot'], 60),
+    packageDate: extractDetailValue(all, ['Package Date', 'Packaged Date', 'Packaged', 'Pkg Date', 'Pkg'], 50),
+    harvestDate: extractDetailValue(all, ['Harvest Date', 'Harvested', 'Harvest'], 50),
+    testDate: extractDetailValue(all, ['Test Date', 'Tested Date', 'Tested'], 50),
+    expirationDate: extractDetailValue(all, ['Expiration Date', 'Expire Date', 'Expires', 'Use By', 'Best By'], 50),
+    lab: extractDetailValue(all, ['Lab', 'Testing Lab', 'Tested by', 'Analysis by'], 70),
+    license: extractDetailValue(all, ['License', 'License #', 'LIC', 'Facility License'], 70)
+  };
+  return details;
+}
+
+function buildLabelNotes(draft, raw) {
+  const details = draft.details || {};
+  const lines = ['Auto-filled from label scanner. Review values against the physical label before relying on them.'];
+  if (details.netWeight) lines.push(`Net weight: ${details.netWeight}`);
+  if (details.totalTerpenes) lines.push(`Total terpenes: ${details.totalTerpenes}%`);
+  if (details.batch) lines.push(`Batch/Lot: ${details.batch}`);
+  if (details.packageDate) lines.push(`Packaged: ${details.packageDate}`);
+  if (details.harvestDate) lines.push(`Harvested: ${details.harvestDate}`);
+  if (details.testDate) lines.push(`Tested: ${details.testDate}`);
+  if (details.expirationDate) lines.push(`Expires/Use by: ${details.expirationDate}`);
+  if (details.lab) lines.push(`Testing lab: ${details.lab}`);
+  if (details.license) lines.push(`License: ${details.license}`);
+
+  const cannabinoidLines = Object.entries(details.cannabinoids || {})
+    .filter(([, value]) => value)
+    .map(([key, value]) => `${key}: ${value}%`);
+  if (cannabinoidLines.length) lines.push(`Cannabinoids: ${cannabinoidLines.join(', ')}`);
+
+  const shortRaw = String(raw || '').replace(/\s{2,}/g, ' ').trim().slice(0, 900);
+  if (shortRaw) lines.push(`OCR text: ${shortRaw}`);
+  return lines.join('\n');
+}
+
+function scannerConfidence(draft) {
+  let score = 0;
+  if (draft.strainName) score += 22;
+  if (draft.brand) score += 16;
+  if (draft.thc) score += 22;
+  if (draft.cbd) score += 12;
+  if (draft.terpenes) score += 8;
+  if (draft.details?.batch || draft.details?.packageDate || draft.details?.netWeight) score += 8;
+  if (Object.keys(draft.details?.cannabinoids || {}).length >= 3) score += 12;
+  return Math.min(100, score);
+}
+
+function parseLabelText(text) {
+  const raw = String(text || '').trim();
+  const all = normalizeOcrText(raw);
+  const details = extractLabelDetails(all);
+  const cannabinoids = details.cannabinoids || {};
+  const thc = cannabinoids['Total THC'] || deriveTotalThc(cannabinoids) || percentNearLabel(all, [/total\s+(?:active\s+|potential\s+)?thc/i, /thc\s+total/i, /\bthc\b(?!\s*a)/i]) || '';
+  const cbd = cannabinoids['Total CBD'] || deriveTotalCbd(cannabinoids) || percentNearLabel(all, [/total\s+cbd/i, /cbd\s+total/i, /\bcbd\b(?!\s*a)/i]) || '';
+  const draft = {
+    strainName: cleanLabelValue(extractStrainName(all)).slice(0, 60),
+    brand: cleanLabelValue(extractBrand(all)).slice(0, 70),
+    type: detectProductType(all),
     thc,
     cbd,
-    terpenes,
-    notes: notesParts.filter(Boolean).join('\n')
+    terpenes: extractTerpenes(all),
+    details
   };
+  draft.notes = buildLabelNotes(draft, raw);
+  draft.confidence = scannerConfidence(draft);
+  return draft;
+}
+
+function scoreOcrText(text = '') {
+  const value = normalizeOcrText(text);
+  const draft = value ? parseLabelText(value) : {};
+  let score = Math.min(20, Math.floor(value.length / 35));
+  if (draft.strainName) score += 18;
+  if (draft.brand || matchKnownBrand(value)) score += 16;
+  if (draft.thc || /\bTHCA\b|Total THC/i.test(value)) score += 20;
+  if (draft.cbd || /\bCBDA\b|Total CBD/i.test(value)) score += 10;
+  if (/\d+(?:\.\d+)?\s*%/.test(value)) score += 12;
+  if (/Batch|Lot|Package|Harvest|Tested|Net Wt|Weight/i.test(value)) score += 10;
+  if (/Terpene|Myrcene|Limonene|Pinene|Linalool|Caryophyllene/i.test(value)) score += 8;
+  if (/Flower|Cartridge|Pre[- ]?roll|Concentrate|Edible/i.test(value)) score += 6;
+  return Math.min(100, score);
+}
+
+function combineOcrTexts(texts = []) {
+  const seen = new Set();
+  const lines = [];
+  for (const text of texts) {
+    for (const line of getCleanLines(text)) {
+      const key = normalizeName(line.replace(/[^A-Za-z0-9.%]+/g, ' '));
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      lines.push(line);
+    }
+  }
+  return lines.join('\n').trim();
+}
+
+
+function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+function makeCanvas(width, height) {
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(width));
+  canvas.height = Math.max(1, Math.round(height));
+  return canvas;
+}
+
+function findBrightLabelBox(canvas) {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const { width, height } = canvas;
+  const step = Math.max(2, Math.floor(Math.min(width, height) / 260));
+  const data = ctx.getImageData(0, 0, width, height).data;
+  let minX = width, minY = height, maxX = 0, maxY = 0, count = 0;
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      const idx = (y * width + x) * 4;
+      const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const bright = (r + g + b) / 3;
+      const lowSaturation = max - min < 55;
+      if (bright > 145 && lowSaturation) {
+        minX = Math.min(minX, x); minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+        count++;
+      }
+    }
+  }
+  const boxW = maxX - minX;
+  const boxH = maxY - minY;
+  const minHits = Math.max(30, (width * height) / (step * step) * 0.01);
+  if (count < minHits || boxW < width * 0.12 || boxH < height * 0.08) {
+    return { x: 0, y: 0, w: width, h: height };
+  }
+  const padX = boxW * 0.12;
+  const padY = boxH * 0.2;
+  return {
+    x: Math.max(0, minX - padX),
+    y: Math.max(0, minY - padY),
+    w: Math.min(width - Math.max(0, minX - padX), boxW + padX * 2),
+    h: Math.min(height - Math.max(0, minY - padY), boxH + padY * 2)
+  };
+}
+
+function cloneCanvasWithFilter(source, mode = 'contrast') {
+  const canvas = makeCanvas(source.width, source.height);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(source, 0, 0);
+  const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = image.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+    let value = gray;
+    if (mode === 'contrast') value = Math.max(0, Math.min(255, (gray - 128) * 1.9 + 128));
+    if (mode === 'binary') value = gray > 150 ? 255 : 0;
+    if (mode === 'soft') value = Math.max(0, Math.min(255, (gray - 128) * 1.35 + 136));
+    if (mode === 'invert') value = 255 - Math.max(0, Math.min(255, (gray - 128) * 1.8 + 128));
+    data[i] = data[i + 1] = data[i + 2] = value;
+  }
+  ctx.putImageData(image, 0, 0);
+  return canvas;
+}
+
+function cropCanvas(source, box) {
+  const crop = makeCanvas(box.w, box.h);
+  crop.getContext('2d').drawImage(source, box.x, box.y, box.w, box.h, 0, 0, crop.width, crop.height);
+  return crop;
+}
+
+function upscaleCanvas(source, targetMax = 1900) {
+  const scale = Math.max(1.2, Math.min(3.4, targetMax / Math.max(source.width, source.height)));
+  const canvas = makeCanvas(source.width * scale, source.height * scale);
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+async function createOcrVariants(dataUrl) {
+  const img = await loadImageElement(dataUrl);
+  const maxBase = 2400;
+  const scale = Math.min(maxBase / Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height), 2.2);
+  const base = makeCanvas((img.naturalWidth || img.width) * scale, (img.naturalHeight || img.height) * scale);
+  const baseCtx = base.getContext('2d');
+  baseCtx.imageSmoothingEnabled = true;
+  baseCtx.drawImage(img, 0, 0, base.width, base.height);
+
+  const box = findBrightLabelBox(base);
+  const labelCrop = cropCanvas(base, box);
+  const labelUpscale = upscaleCanvas(labelCrop, 2100);
+
+  // Brand logos often sit above the white test label, so also scan a taller package crop.
+  const logoPad = Math.max(labelCrop.height * 1.15, base.height * 0.18);
+  const packageBox = {
+    x: Math.max(0, box.x - box.w * 0.22),
+    y: Math.max(0, box.y - logoPad),
+    w: Math.min(base.width - Math.max(0, box.x - box.w * 0.22), box.w * 1.44),
+    h: Math.min(base.height - Math.max(0, box.y - logoPad), box.h + logoPad * 1.15)
+  };
+  const packageCrop = upscaleCanvas(cropCanvas(base, packageBox), 2200);
+
+  const topBox = {
+    x: 0,
+    y: 0,
+    w: base.width,
+    h: Math.max(1, Math.round(base.height * 0.42))
+  };
+  const topCrop = upscaleCanvas(cropCanvas(base, topBox), 2200);
+
+  const variants = [
+    { name: 'white test label crop', canvas: cloneCanvasWithFilter(labelUpscale, 'contrast') },
+    { name: 'high-contrast cannabinoid table', canvas: cloneCanvasWithFilter(labelUpscale, 'binary') },
+    { name: 'package + logo area', canvas: cloneCanvasWithFilter(packageCrop, 'soft') },
+    { name: 'full photo', canvas: cloneCanvasWithFilter(upscaleCanvas(base, 2100), 'soft') },
+    { name: 'top brand area', canvas: cloneCanvasWithFilter(topCrop, 'contrast') },
+    { name: 'inverted label fallback', canvas: cloneCanvasWithFilter(labelUpscale, 'invert') }
+  ];
+
+  const seen = new Set();
+  return variants
+    .map(item => ({ name: item.name, src: item.canvas.toDataURL('image/png') }))
+    .filter(item => {
+      const key = item.src.slice(0, 120);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 
 function scanDraftFromForm(form) {
@@ -1046,22 +1600,48 @@ function scanDraftFromForm(form) {
   };
 }
 
+
+function renderScannerDetailGrid(draft = {}) {
+  const details = draft.details || {};
+  const values = [
+    ['Confidence', `${draft.confidence || 0}%`],
+    ['Brand', draft.brand || 'Needs review'],
+    ['THC', draft.thc ? `${draft.thc}%` : 'Needs review'],
+    ['CBD', draft.cbd ? `${draft.cbd}%` : 'Needs review'],
+    ['Total cannabinoids', details.cannabinoids?.['Total Cannabinoids'] ? `${details.cannabinoids['Total Cannabinoids']}%` : '—'],
+    ['THCA', details.cannabinoids?.THCA ? `${details.cannabinoids.THCA}%` : '—'],
+    ['Δ9 THC', details.cannabinoids?.['Δ9 THC'] ? `${details.cannabinoids['Δ9 THC']}%` : '—'],
+    ['Total terpenes', details.totalTerpenes ? `${details.totalTerpenes}%` : '—'],
+    ['Net weight', details.netWeight || '—'],
+    ['Batch/Lot', details.batch || '—'],
+    ['Packaged', details.packageDate || '—'],
+    ['Tested', details.testDate || '—']
+  ];
+  return `<div class="scanner-detail-grid">${values.map(([label, value]) => `
+    <div class="scanner-detail">
+      <small>${escapeHtml(label)}</small>
+      <strong>${escapeHtml(value)}</strong>
+    </div>`).join('')}</div>`;
+}
+
 function renderScanDraft(draft) {
   $('#scanDraft').classList.remove('hidden');
+  const quality = draft.confidence >= 80 ? 'strong capture' : draft.confidence >= 55 ? 'review needed' : 'low confidence';
   $('#scanDraft').innerHTML = `
-    <p class="eyebrow">scanner draft</p>
+    <p class="eyebrow">scanner draft · ${escapeHtml(quality)}</p>
     <h3>${escapeHtml(draft.strainName || 'Review detected label')}</h3>
-    <p class="muted">Review the label results. If the scanner missed the name, type it in before saving.</p>
+    <p class="muted">StrainVault auto-filled the fields it could read. Cannabis labels vary a lot, so compare THC/CBD, brand, and strain name against the package before saving.</p>
+    ${renderScannerDetailGrid(draft)}
     <form id="scanDraftForm" class="flow-form">
       <div class="form-grid">
-        <label>Strain name<input name="strainName" value="${escapeHtml(draft.strainName || '')}" required /></label>
-        <label>Brand / grower<input name="brand" value="${escapeHtml(draft.brand || '')}" placeholder="Optional" /></label>
+        <label>Strain name<input name="strainName" value="${escapeHtml(draft.strainName || '')}" required placeholder="Type strain name if missed" /></label>
+        <label>Brand / grower<input name="brand" value="${escapeHtml(draft.brand || '')}" placeholder="Brand may need manual review if it is only a logo" /></label>
         <label>Product type<select name="type">${['Flower','Cart','Edible','Concentrate','Pre-roll','Tincture'].map(type => `<option ${type === draft.type ? 'selected' : ''}>${type}</option>`).join('')}</select></label>
-        <label>THC %<input name="thc" type="number" step="0.1" value="${escapeHtml(draft.thc || '')}" /></label>
-        <label>CBD %<input name="cbd" type="number" step="0.1" value="${escapeHtml(draft.cbd || '')}" /></label>
+        <label>THC %<input name="thc" type="number" step="0.1" value="${escapeHtml(draft.thc || '')}" placeholder="Total THC" /></label>
+        <label>CBD %<input name="cbd" type="number" step="0.1" value="${escapeHtml(draft.cbd || '')}" placeholder="Total CBD" /></label>
         <label>Top terpenes<input name="terpenes" value="${escapeHtml(draft.terpenes || '')}" placeholder="Myrcene, Limonene" /></label>
       </div>
-      <label>Notes<textarea name="notes" placeholder="Batch, flavor, smell, package details...">${escapeHtml(draft.notes || '')}</textarea></label>
+      <label>Captured label details<textarea name="notes" placeholder="Batch, cannabinoid table, package details...">${escapeHtml(draft.notes || '')}</textarea></label>
       <div class="button-row wrap">
         <button class="primary-btn" type="submit">Save strain card</button>
         <button id="applyScanDraftBtn" class="ghost-btn" type="button">Apply to strain form</button>
