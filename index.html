@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#11151f" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="StrainVault" />
+  <title>StrainVault — Private Cannabis Journal</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="aurora aurora-one"></div>
+  <div class="aurora aurora-two"></div>
+  <div class="grain"></div>
+
+  <div id="lockScreen" class="lock-screen hidden" aria-live="polite">
+    <div class="glass lock-card rise-in">
+      <div class="brand-mark large" aria-hidden="true">✦</div>
+      <h1>Unlock StrainVault</h1>
+      <p>Your journal is encrypted on this device. Enter your vault passcode to continue.</p>
+      <label class="field-label" for="unlockPass">Vault passcode</label>
+      <input id="unlockPass" class="glass-input" type="password" autocomplete="current-password" placeholder="Enter passcode" />
+      <button id="unlockBtn" class="primary-btn full">Unlock vault</button>
+      <p id="unlockStatus" class="tiny muted"></p>
+    </div>
+  </div>
+
+  <main id="appShell" class="app-shell">
+    <header class="topbar glass soft-blur">
+      <button id="profileChip" class="profile-chip" aria-label="Open settings">
+        <span class="avatar">SV</span>
+        <span>
+          <strong>StrainVault</strong>
+          <small>private cannabis journal</small>
+        </span>
+      </button>
+      <button id="quickAddTop" class="floating-add" aria-label="Quick log strain">+</button>
+    </header>
+
+    <section class="view active" data-view="home" aria-label="Home dashboard">
+      <div class="hero-card glass reveal">
+        <div class="hero-copy">
+          <p class="eyebrow">your personal profile</p>
+          <h1>Track what actually works for you.</h1>
+          <p>Log strains, effects, receipts, and stash in one thumb-friendly journal. No dispensary clutter. No exposed keys. No weird menus.</p>
+        </div>
+        <div class="living-orb" aria-hidden="true">
+          <div class="orb-core"></div>
+          <span class="leaf leaf-a">☘</span>
+          <span class="leaf leaf-b">✦</span>
+          <span class="leaf leaf-c">✧</span>
+        </div>
+      </div>
+
+      <div class="quick-grid reveal">
+        <button class="action-card glass" data-action="open-log">
+          <span class="icon-bubble">＋</span>
+          <strong>Quick Session</strong>
+          <small>20-second guided log</small>
+        </button>
+        <button class="action-card glass" data-action="open-scan">
+          <span class="icon-bubble">◉</span>
+          <strong>Scan Label</strong>
+          <small>Photo-first product entry</small>
+        </button>
+        <button class="action-card glass" data-action="open-export">
+          <span class="icon-bubble">↗</span>
+          <strong>Share Card</strong>
+          <small>Export your profile image</small>
+        </button>
+      </div>
+
+      <div id="todayPanel" class="section-card glass reveal"></div>
+      <div id="insightStrip" class="insight-strip reveal"></div>
+      <div id="recentTimeline" class="section-card glass reveal"></div>
+    </section>
+
+    <section class="view" data-view="vault" aria-label="Strain vault">
+      <div class="section-heading reveal">
+        <div>
+          <p class="eyebrow">vault</p>
+          <h2>Your strains</h2>
+        </div>
+        <button class="ghost-btn" data-action="open-log">Add</button>
+      </div>
+      <div class="search-row glass reveal">
+        <input id="strainSearch" type="search" placeholder="Search strain, terpene, effect..." />
+        <select id="typeFilter" aria-label="Filter product type">
+          <option value="all">All</option>
+          <option>Flower</option>
+          <option>Cart</option>
+          <option>Edible</option>
+          <option>Concentrate</option>
+          <option>Pre-roll</option>
+          <option>Tincture</option>
+        </select>
+      </div>
+      <div id="strainVault" class="card-stack"></div>
+    </section>
+
+    <section class="view" data-view="journal" aria-label="Journal timeline">
+      <div class="section-heading reveal">
+        <div>
+          <p class="eyebrow">timeline</p>
+          <h2>Effect journal</h2>
+        </div>
+        <button class="ghost-btn" data-action="open-log">Log</button>
+      </div>
+      <div id="journalTimeline" class="journal-list"></div>
+    </section>
+
+    <section class="view" data-view="scan" aria-label="Label scanner">
+      <div class="section-heading reveal">
+        <div>
+          <p class="eyebrow">scanner</p>
+          <h2>Photo-first entry</h2>
+        </div>
+      </div>
+      <div class="section-card glass reveal">
+        <div class="scanner-zone" id="scannerZone">
+          <input id="scanImageInput" type="file" accept="image/*" capture="environment" hidden />
+          <button id="scanImageBtn" class="scan-button">
+            <span>◉</span>
+            Take or upload label photo
+          </button>
+          <p>Keep a photo of the package, receipt, or test label. No image leaves this device.</p>
+          <img id="scanPreview" class="preview-img hidden" alt="Uploaded label preview" />
+        </div>
+      </div>
+      <div class="section-card glass reveal">
+        <h3>Paste label text</h3>
+        <p class="muted">For now, paste any text from the label and StrainVault will pull obvious THC, CBD, strain, and terpene clues locally.</p>
+        <textarea id="labelText" class="glass-textarea" placeholder="Example: Blue Dream, Flower, THC 24.6%, CBD 0.2%, Terpenes: Myrcene, Limonene, Pinene"></textarea>
+        <button id="parseLabelBtn" class="primary-btn full">Create draft from label</button>
+      </div>
+      <div id="scanDraft" class="section-card glass hidden"></div>
+    </section>
+
+    <section class="view" data-view="insights" aria-label="Personal insights">
+      <div class="section-heading reveal">
+        <div>
+          <p class="eyebrow">signals</p>
+          <h2>Your cannabis profile</h2>
+        </div>
+        <button class="ghost-btn" data-action="open-export">Export</button>
+      </div>
+      <div id="profileDashboard" class="dashboard-grid"></div>
+      <div id="matchEngine" class="section-card glass reveal"></div>
+    </section>
+
+    <section class="view" data-view="stash" aria-label="Stash and receipts">
+      <div class="section-heading reveal">
+        <div>
+          <p class="eyebrow">stash</p>
+          <h2>Inventory & receipts</h2>
+        </div>
+        <button class="ghost-btn" data-action="open-stash">Add</button>
+      </div>
+      <div id="stashList" class="card-stack"></div>
+    </section>
+
+    <section class="view" data-view="settings" aria-label="Settings and security">
+      <div class="section-heading reveal">
+        <div>
+          <p class="eyebrow">privacy</p>
+          <h2>Security center</h2>
+        </div>
+      </div>
+      <div class="section-card glass reveal">
+        <h3>Local-first by design</h3>
+        <p class="muted">This MVP does not use cloud storage, third-party scripts, analytics, ads, or API keys. Your entries stay in this browser unless you export or clear them.</p>
+        <div class="security-list">
+          <span>✓ No exposed API keys</span>
+          <span>✓ No ordering or sales flow</span>
+          <span>✓ Optional AES-GCM local vault lock</span>
+          <span>✓ Export/import your own data</span>
+        </div>
+      </div>
+      <div class="section-card glass reveal">
+        <h3>Vault passcode</h3>
+        <p id="securityStatus" class="muted"></p>
+        <label class="field-label" for="vaultPass">New passcode</label>
+        <input id="vaultPass" class="glass-input" type="password" placeholder="Create a passcode" />
+        <div class="button-row">
+          <button id="enableLockBtn" class="primary-btn">Enable lock</button>
+          <button id="disableLockBtn" class="ghost-btn danger">Disable</button>
+        </div>
+      </div>
+      <div class="section-card glass reveal">
+        <h3>Data tools</h3>
+        <div class="button-row wrap">
+          <button id="exportJsonBtn" class="ghost-btn">Export JSON</button>
+          <label class="ghost-btn file-label">Import JSON<input id="importJsonInput" type="file" accept="application/json" hidden /></label>
+          <button id="clearDataBtn" class="ghost-btn danger">Clear all</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <nav class="bottom-nav glass" aria-label="Primary navigation">
+    <button class="nav-btn active" data-nav="home"><span>⌂</span><small>Home</small></button>
+    <button class="nav-btn" data-nav="vault"><span>◈</span><small>Vault</small></button>
+    <button class="nav-btn" data-nav="journal"><span>☰</span><small>Journal</small></button>
+    <button class="nav-btn" data-nav="scan"><span>◉</span><small>Scan</small></button>
+    <button class="nav-btn" data-nav="insights"><span>✦</span><small>Signals</small></button>
+    <button class="nav-btn" data-nav="stash"><span>◒</span><small>Stash</small></button>
+  </nav>
+
+  <div id="modalBackdrop" class="modal-backdrop hidden" role="presentation"></div>
+
+  <section id="logModal" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="logTitle">
+    <div class="sheet-handle"></div>
+    <div class="sheet-head">
+      <div>
+        <p class="eyebrow">quick flow</p>
+        <h2 id="logTitle">Track a session</h2>
+      </div>
+      <button class="close-btn" data-close="logModal" aria-label="Close">×</button>
+    </div>
+    <form id="logForm" class="flow-form">
+      <div class="form-grid">
+        <label>Strain name<input name="strainName" required placeholder="Blue Dream" /></label>
+        <label>Brand / grower<input name="brand" placeholder="Optional" /></label>
+        <label>Product type<select name="type"><option>Flower</option><option>Cart</option><option>Edible</option><option>Concentrate</option><option>Pre-roll</option><option>Tincture</option></select></label>
+        <label>THC %<input name="thc" type="number" min="0" max="100" step="0.1" placeholder="24.5" /></label>
+        <label>CBD %<input name="cbd" type="number" min="0" max="100" step="0.1" placeholder="0.3" /></label>
+        <label>Top terpenes<input name="terpenes" placeholder="Myrcene, Limonene" /></label>
+      </div>
+      <div class="mood-grid">
+        <label>Mood before<select name="mood"><option>Neutral</option><option>Stressed</option><option>Tired</option><option>Creative</option><option>Sore</option><option>Anxious</option><option>Social</option></select></label>
+        <label>Use case<select name="intent"><option>Relax</option><option>Sleep</option><option>Focus</option><option>Creativity</option><option>Appetite</option><option>Social</option><option>Pain relief</option></select></label>
+      </div>
+      <div class="slider-stack">
+        <label>Calm <input name="calm" type="range" min="0" max="10" value="5" /></label>
+        <label>Energy <input name="energy" type="range" min="0" max="10" value="5" /></label>
+        <label>Clarity <input name="clarity" type="range" min="0" max="10" value="5" /></label>
+        <label>Anxiety <input name="anxiety" type="range" min="0" max="10" value="2" /></label>
+        <label>Sleepiness <input name="sleepiness" type="range" min="0" max="10" value="4" /></label>
+      </div>
+      <div class="form-grid">
+        <label>Rating<select name="rating"><option value="5">★★★★★ Loved it</option><option value="4">★★★★ Good</option><option value="3">★★★ Okay</option><option value="2">★★ Not great</option><option value="1">★ Avoid</option></select></label>
+        <label>Price<input name="price" type="number" min="0" step="0.01" placeholder="Optional" /></label>
+      </div>
+      <label>Notes<textarea name="notes" placeholder="Taste, onset, body feel, anything you want to remember..."></textarea></label>
+      <div class="photo-row">
+        <label class="photo-picker">Label photo<input name="labelPhoto" type="file" accept="image/*" capture="environment" /></label>
+        <label class="photo-picker">Receipt<input name="receiptPhoto" type="file" accept="image/*" capture="environment" /></label>
+      </div>
+      <button class="primary-btn full" type="submit">Save session</button>
+    </form>
+  </section>
+
+  <section id="stashModal" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="stashTitle">
+    <div class="sheet-handle"></div>
+    <div class="sheet-head">
+      <div>
+        <p class="eyebrow">inventory</p>
+        <h2 id="stashTitle">Add to stash</h2>
+      </div>
+      <button class="close-btn" data-close="stashModal" aria-label="Close">×</button>
+    </div>
+    <form id="stashForm" class="flow-form">
+      <div class="form-grid">
+        <label>Item / strain<input name="name" required placeholder="Gelato cart" /></label>
+        <label>Amount<input name="amount" placeholder="3.5g, 1 cart, 100mg" /></label>
+        <label>Price<input name="price" type="number" min="0" step="0.01" /></label>
+        <label>Dispensary<input name="dispensary" placeholder="Optional" /></label>
+      </div>
+      <label>Receipt or package photo<input name="photo" type="file" accept="image/*" capture="environment" /></label>
+      <button class="primary-btn full" type="submit">Save stash item</button>
+    </form>
+  </section>
+
+  <section id="exportModal" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="exportTitle">
+    <div class="sheet-handle"></div>
+    <div class="sheet-head">
+      <div>
+        <p class="eyebrow">shareable</p>
+        <h2 id="exportTitle">Profile card</h2>
+      </div>
+      <button class="close-btn" data-close="exportModal" aria-label="Close">×</button>
+    </div>
+    <canvas id="profileCanvas" width="1080" height="1350" class="profile-canvas"></canvas>
+    <div class="button-row">
+      <button id="renderCardBtn" class="primary-btn">Refresh card</button>
+      <a id="downloadCardLink" class="ghost-btn" download="strainvault-profile.png">Download PNG</a>
+    </div>
+  </section>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
