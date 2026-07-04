@@ -127,7 +127,7 @@
             <span>◉</span>
             Take or upload label photo
           </button>
-          <p>Take a clear, close photo of the test label. The app can try to read the text locally, then you review before saving.</p>
+          <p>Take a clear, close photo of the test label. The app reads the label locally, then shows a review draft with strain name, potency, terpene profile, dates, tags, and license numbers before saving.</p>
           <img id="scanPreview" class="preview-img hidden" alt="Uploaded label preview" />
           <div class="scanner-actions">
             <button id="readLabelPhotoBtn" class="primary-btn" type="button" disabled>Read label photo</button>
@@ -139,7 +139,7 @@
       <div class="section-card glass reveal">
         <h3>Review label text</h3>
         <p class="muted">Use <strong>Read label photo</strong>, or paste text copied with iPhone Live Text. StrainVault parses the details on this device and fills a strain card for review.</p>
-        <textarea id="labelText" class="glass-textarea" placeholder="Example: Blue Dream, Flower, THC 24.6%, CBD 0.2%, Terpenes: Myrcene, Limonene, Pinene"></textarea>
+        <textarea id="labelText" class="glass-textarea" placeholder="Paste label text here. Example: Best if Used by Date: 05/11/2027, Produced By: CUL000027, Exact Potency: THC: 250.00 mg/serving, CBD: 0.11 mg/serving, Marijuana Product Approval Number: M00002591076, SHOW BIZ"></textarea>
         <button id="parseLabelBtn" class="primary-btn full">Create draft from text</button>
       </div>
       <div id="scanDraft" class="section-card glass hidden"></div>
@@ -271,7 +271,7 @@
     <div class="scanner-assist glass">
       <div>
         <strong>Label scanner assist</strong>
-        <small>Use a package label to fill strain, THC/CBD, terpenes, brand, and type.</small>
+        <small>Use a package label to fill strain, THC/CBD, terpene profile, dates, tags, license numbers, weight, brand/grower, and type.</small>
         <small id="strainScannerStatus" class="muted">Optional: use scanner assist to fill this card from package text.</small>
       </div>
       <button class="mini-btn accent" type="button" data-action="open-scan-fill">Scan label</button>
@@ -351,6 +351,6 @@
 
   <div id="toast" class="toast hidden"></div>
 
-  <script src="app.js?v=34"></script>
+  <script src="app.js?v=35"></script>
 </body>
 </html>

@@ -51,7 +51,7 @@ For GitHub Free, GitHub Pages is available for public repositories. Private repo
 - Turned the vault into a shareable strain-card library. Each strain now has a Share card button that renders a PNG card.
 - Added Web Share API support where available, with Download PNG fallback.
 
-Note: the scanner stays local-first and does not use external OCR APIs or exposed API keys. v3.4 can load an open-source browser OCR library from a CDN when you tap **Read label photo**; the package image is processed in the browser. If the OCR library cannot load or cannot read the label, use iPhone/iPad Live Text to copy the label text and paste it into the app.
+Note: the scanner stays local-first and does not use external OCR APIs or exposed API keys. v3.5 can load an open-source browser OCR library from a CDN when you tap **Read label photo**; the package image is processed in the browser. If the OCR library cannot load or cannot read the label, use iPhone/iPad Live Text to copy the label text and paste it into the app.
 
 
 ## Version 3.1 audit/fix notes
@@ -63,12 +63,12 @@ Note: the scanner stays local-first and does not use external OCR APIs or expose
 - Added cache-busting query strings for GitHub Pages refresh reliability.
 
 
-## v3.4 Scanner Fix
+## v3.5 Scanner Fix
 - Adds Read label photo workflow with browser OCR fallback.
 - Prevents empty photo uploads from creating Untitled strain drafts.
 - Improves scanner status messages and strain-name parsing.
 
-## v3.4 Advanced Label Capture Fix
+## v3.5 Missouri Label Capture Fix Fix
 
 - Runs multiple OCR passes: cropped white test label, high-contrast cannabinoid table, package/logo area, full photo, top brand area, and inverted fallback.
 - Improves brand detection with common cannabis-brand matching and better `grown by / packaged by / manufactured by` parsing.
@@ -76,3 +76,24 @@ Note: the scanner stays local-first and does not use external OCR APIs or expose
 - Calculates Total THC/CBD from acid forms when the label does not explicitly show totals.
 - Shows missing scanner fields clearly so the user can correct only what OCR could not read.
 - Updates GitHub Pages cache busting to `v=34`.
+
+
+## v3.5 Missouri label scanner fix
+
+This build improves the scanner review draft for cannabis package labels like the Show Biz example. It now captures and stores:
+
+- strain name from the line after Marijuana Product Approval Number
+- brand/grower or Produced By license code
+- THC % and CBD % when exact potency values are readable
+- Exact Potency mg/serving values
+- terpene profile values
+- Best if Used By date
+- Produced By
+- Testing License #
+- Testing Tag #
+- Source Tag #
+- Total Weight and servings/doses
+- Marijuana Product Approval Number
+- usage/effect instructions when readable
+
+The app now runs extra OCR passes over the label header, exact potency table, terpene table, and approval/strain-name area, then shows all captured fields for review before saving.
