@@ -25,7 +25,7 @@ function getStorage() {
 const localStore = getStorage();
 
 const DEFAULT_STATE = {
-  version: 3,
+  version: 32,
   createdAt: new Date().toISOString(),
   strains: [],
   sessions: [],
@@ -40,6 +40,8 @@ let state = safeClone(DEFAULT_STATE);
 let currentCryptoKey = null;
 let secureEnabled = false;
 let lastScanImage = '';
+let ocrBusy = false;
+let tesseractLoadPromise = null;
 let toastTimer = null;
 let editingStrainId = '';
 let editingSessionId = '';
@@ -823,6 +825,127 @@ async function handleStashSubmit(event) {
   toast(existing ? 'Stash changes applied.' : 'Stash item saved.');
 }
 
+
+function setOcrStatus(message) {
+  const status = $('#ocrStatus');
+  if (status) status.textContent = message;
+}
+
+function setScanButtonsEnabled(hasImage) {
+  const readBtn = $('#readLabelPhotoBtn');
+  if (readBtn) readBtn.disabled = !hasImage || ocrBusy;
+}
+
+function resetScanner() {
+  lastScanImage = '';
+  const input = $('#scanImageInput');
+  const preview = $('#scanPreview');
+  const text = $('#labelText');
+  const draft = $('#scanDraft');
+  if (input) input.value = '';
+  if (preview) {
+    preview.removeAttribute('src');
+    preview.classList.add('hidden');
+  }
+  if (text) text.value = '';
+  if (draft) {
+    draft.classList.add('hidden');
+    draft.innerHTML = '';
+  }
+  setScanButtonsEnabled(false);
+  setOcrStatus('Upload a label photo to begin.');
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const existing = [...document.scripts].find(script => script.src === src);
+    if (existing) {
+      if (window.Tesseract) resolve();
+      else existing.addEventListener('load', resolve, { once: true });
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.crossOrigin = 'anonymous';
+    script.onload = resolve;
+    script.onerror = () => reject(new Error('OCR library could not load.'));
+    document.head.appendChild(script);
+  });
+}
+
+async function loadOcrEngine() {
+  if (window.Tesseract) return window.Tesseract;
+  if (!tesseractLoadPromise) {
+    tesseractLoadPromise = loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js')
+      .then(() => {
+        if (!window.Tesseract) throw new Error('OCR engine did not initialize.');
+        return window.Tesseract;
+      });
+  }
+  return tesseractLoadPromise;
+}
+
+async function tryNativeTextDetector() {
+  if (!('TextDetector' in window)) return '';
+  const preview = $('#scanPreview');
+  if (!preview || !preview.src) return '';
+  try {
+    const detector = new window.TextDetector();
+    const results = await detector.detect(preview);
+    return (results || []).map(item => item.rawValue || '').join('\n').trim();
+  } catch (error) {
+    console.info('Native text detector unavailable:', error);
+    return '';
+  }
+}
+
+async function runOcrOnScanImage() {
+  if (!lastScanImage) {
+    toast('Take or upload a label photo first.');
+    return;
+  }
+  if (ocrBusy) return;
+  ocrBusy = true;
+  setScanButtonsEnabled(true);
+  setOcrStatus('Reading label photo… keep this page open.');
+  try {
+    let text = await tryNativeTextDetector();
+    if (!text) {
+      setOcrStatus('Loading local OCR reader… first scan may take a moment.');
+      const Tesseract = await loadOcrEngine();
+      const result = await Tesseract.recognize(lastScanImage, 'eng', {
+        logger: progress => {
+          if (progress?.status === 'recognizing text' && Number.isFinite(progress.progress)) {
+            setOcrStatus(`Reading label photo… ${Math.round(progress.progress * 100)}%`);
+          } else if (progress?.status) {
+            setOcrStatus(`${capitalize(progress.status)}…`);
+          }
+        }
+      });
+      text = result?.data?.text || '';
+    }
+    text = String(text || '').trim();
+    if (!text) {
+      setOcrStatus('Could not read the label. Try a closer, brighter photo or paste text with iPhone Live Text.');
+      toast('Could not read the label text.');
+      return;
+    }
+    $('#labelText').value = text;
+    const draft = parseLabelText(text);
+    renderScanDraft(draft);
+    setOcrStatus(draft.strainName ? 'Label text detected. Review the draft before saving.' : 'Label text detected, but strain name needs review. Add the name before saving.');
+    toast('Label text read. Review the draft.');
+  } catch (error) {
+    console.error(error);
+    setOcrStatus('Photo OCR failed. You can still use iPhone Live Text: open the photo, copy the label text, paste it here, then create a draft.');
+    toast('Scanner could not read the photo. Paste label text instead.');
+  } finally {
+    ocrBusy = false;
+    setScanButtonsEnabled(Boolean(lastScanImage));
+  }
+}
+
 function cleanLabelValue(value = '') {
   return String(value || '')
     .replace(/^[#:\-\s]+/, '')
@@ -842,6 +965,21 @@ function extractPercent(all, labels) {
   return match?.[1] || '';
 }
 
+function normalizeScannedName(value = '') {
+  return cleanLabelValue(value)
+    .replace(/\b(cannabis|marijuana|flower|buds?|premium|indica|sativa|hybrid|pre[- ]?roll|preroll|cartridge|vape|concentrate)\b/ig, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/[.,;:-]+$/g, '')
+    .trim();
+}
+
+function extractAfterKeyword(text, keywords) {
+  const escaped = keywords.map(label => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const regex = new RegExp(`(?:${escaped})\\s*[:#-]?\\s*([^\\n|;,]+)`, 'i');
+  const match = text.match(regex);
+  return cleanLabelValue(match?.[1] || '');
+}
+
 function parseLabelText(text) {
   const raw = String(text || '').trim();
   const all = raw.replace(/\r/g, '\n');
@@ -850,36 +988,47 @@ function parseLabelText(text) {
     .split(/\n|\||,|;|•|·/)
     .map(line => cleanLabelValue(line))
     .filter(Boolean);
-  const thc = extractPercent(all, ['Total THC', 'THC', 'Delta 9 THC', 'D9 THC', 'THCA']);
-  const cbd = extractPercent(all, ['Total CBD', 'CBD', 'CBDA']);
-  const brand = extractField(all, ['Brand', 'Grower', 'Cultivator', 'Producer', 'Manufacturer', 'Made by', 'Grown by']) || '';
-  const namedStrain = extractField(all, ['Strain Name', 'Strain', 'Product Name', 'Product', 'Cultivar', 'Name']);
-  const typeMatch = all.match(/\b(Flower|Bud|Cart|Cartridge|Vape|Edible|Gummy|Concentrate|Wax|Rosin|Resin|Pre[- ]?roll|Preroll|Tincture)\b/i)?.[1] || 'Flower';
-  const commonTerpenes = ['myrcene','limonene','caryophyllene','pinene','linalool','humulene','terpinolene','ocimene','bisabolol','camphene','eucalyptol','nerolidol','terpineol','guaiol'];
+
+  const thc = extractPercent(all, ['Total THC', 'THC Total', 'THC', 'Delta 9 THC', 'D9 THC', 'THCA']);
+  const cbd = extractPercent(all, ['Total CBD', 'CBD Total', 'CBD', 'CBDA']);
+  const brand = extractField(all, ['Brand', 'Grower', 'Cultivator', 'Producer', 'Manufacturer', 'Made by', 'Grown by', 'Distributed by', 'Dispensary']) || '';
+  const namedStrain = extractAfterKeyword(all, ['Strain Name', 'Strain', 'Product Name', 'Product', 'Cultivar', 'Item Name', 'Name']);
+  const typeMatch = all.match(/\b(Flower|Bud|Buds|Cart|Cartridge|Vape|Edible|Gummy|Concentrate|Wax|Rosin|Resin|Pre[- ]?roll|Preroll|Tincture)\b/i)?.[1] || 'Flower';
+  const commonTerpenes = ['myrcene','limonene','caryophyllene','beta-caryophyllene','pinene','alpha-pinene','linalool','humulene','terpinolene','ocimene','bisabolol','camphene','eucalyptol','nerolidol','terpineol','guaiol'];
   const terpeneLine = all.match(/Terpenes?\s*[:#-]?\s*([^\n]+)/i)?.[1] || '';
-  const foundTerpenes = commonTerpenes.filter(terp => new RegExp(`\\b${terp}\\b`, 'i').test(all)).map(capitalize);
+  const foundTerpenes = commonTerpenes.filter(terp => new RegExp(`\\b${terp.replace('-', '[- ]?')}\\b`, 'i').test(all)).map(t => capitalize(t.replace(/^beta-|^alpha-/i, '').replace('-', ' ')));
   const terpenes = uniqueList([...parseList(terpeneLine), ...foundTerpenes]).join(', ');
-  const blocked = /(THC|CBD|CBG|CBN|Terpene|Batch|Package|Warning|Cannabinoid|Total|Net Wt|License|Testing|Harvest|Manufactured|Ingredients|Use by|UID|Item|Adult|Government|Activation|Serving|Dose|MG\b|%|\d+\.\d+)/i;
-  const typeOnly = /^(Flower|Bud|Cart|Cartridge|Vape|Edible|Gummy|Concentrate|Wax|Rosin|Resin|Pre[- ]?roll|Preroll|Tincture)$/i;
-  const likelyName = [...segments, ...lines].find(line => {
-    const cleaned = line.replace(/^(strain|product|cultivar|name)\s*[:#-]?\s*/i, '').trim();
-    return cleaned.length >= 3 && cleaned.length <= 60 && !blocked.test(cleaned) && !typeOnly.test(cleaned);
-  }) || '';
-  const strainCandidate = namedStrain || likelyName;
+
+  const blocked = /(THC|CBD|CBG|CBN|Terpene|Batch|Package|Warning|Cannabinoid|Total|Net Wt|License|Testing|Harvest|Manufactured|Ingredients|Use by|UID|Item #|Adult|Government|Activation|Serving|Dose|MG\b|%|\d+\.\d+|Lab|Patient|METRC|Lot|Expiration|Exp\b|Date|Weight|Net)/i;
+  const typeOnly = /^(Flower|Bud|Buds|Cart|Cartridge|Vape|Edible|Gummy|Concentrate|Wax|Rosin|Resin|Pre[- ]?roll|Preroll|Tincture)$/i;
+  const candidates = [...segments, ...lines]
+    .map(line => normalizeScannedName(line.replace(/^(strain|product|cultivar|item name|name)\s*[:#-]?\s*/i, '')))
+    .filter(line => line.length >= 3 && line.length <= 60 && !blocked.test(line) && !typeOnly.test(line));
+
+  const likelyName = candidates.find(line => /[A-Za-z]{3,}/.test(line)) || '';
+  const strainCandidate = normalizeScannedName(namedStrain) || likelyName;
   const type = /cart|cartridge|vape/i.test(typeMatch) ? 'Cart'
     : /pre/i.test(typeMatch) ? 'Pre-roll'
     : /edible|gummy/i.test(typeMatch) ? 'Edible'
     : /wax|rosin|resin|concentrate/i.test(typeMatch) ? 'Concentrate'
     : /tincture/i.test(typeMatch) ? 'Tincture'
     : 'Flower';
+
+  const notesParts = [];
+  const batch = extractAfterKeyword(all, ['Batch', 'Batch ID', 'Lot', 'Lot ID']);
+  const packageDate = extractAfterKeyword(all, ['Package Date', 'Packaged', 'Pkg Date']);
+  if (batch) notesParts.push(`Batch: ${batch}`);
+  if (packageDate) notesParts.push(`Package date: ${packageDate}`);
+  notesParts.push(raw ? 'Created from label scanner assist.' : '');
+
   return {
-    strainName: cleanLabelValue(strainCandidate.replace(/^(strain|product|cultivar|name)\s*:?\s*/i, '')).slice(0, 60),
+    strainName: cleanLabelValue(strainCandidate).slice(0, 60),
     brand,
     type,
     thc,
     cbd,
     terpenes,
-    notes: raw ? 'Created from label scanner assist.' : ''
+    notes: notesParts.filter(Boolean).join('\n')
   };
 }
 
@@ -901,8 +1050,8 @@ function renderScanDraft(draft) {
   $('#scanDraft').classList.remove('hidden');
   $('#scanDraft').innerHTML = `
     <p class="eyebrow">scanner draft</p>
-    <h3>${escapeHtml(draft.strainName || 'Untitled strain')}</h3>
-    <p class="muted">Review the label results. You can save it now, or push it into the full Add/Edit Strain form before saving.</p>
+    <h3>${escapeHtml(draft.strainName || 'Review detected label')}</h3>
+    <p class="muted">Review the label results. If the scanner missed the name, type it in before saving.</p>
     <form id="scanDraftForm" class="flow-form">
       <div class="form-grid">
         <label>Strain name<input name="strainName" value="${escapeHtml(draft.strainName || '')}" required /></label>
@@ -969,12 +1118,18 @@ function applyScanDraftToStrain() {
 async function handleScanImage(event) {
   const file = event.target.files?.[0];
   if (!file) return;
-  lastScanImage = await readOptionalImageFile(file, 'Label photo', 1200, .8);
+  lastScanImage = await readOptionalImageFile(file, 'Label photo', 1600, .86);
   if (!lastScanImage) return;
   $('#scanPreview').src = lastScanImage;
   $('#scanPreview').classList.remove('hidden');
-  toast('Photo attached locally. Paste label text or use Live Text, then create a draft.');
-  renderScanDraft({ strainName: '', brand: '', type: 'Flower', thc: '', cbd: '', terpenes: '', notes: 'Label photo attached.' });
+  const draft = $('#scanDraft');
+  if (draft) {
+    draft.classList.add('hidden');
+    draft.innerHTML = '';
+  }
+  setScanButtonsEnabled(true);
+  setOcrStatus('Photo attached. Tap Read label photo, or paste text copied with iPhone Live Text.');
+  toast('Photo attached. Tap Read label photo to fill bud info.');
 }
 
 function openStrainShare(strainId) {
@@ -1366,14 +1521,18 @@ function bindGlobalEvents() {
 
   $('#scanImageBtn').addEventListener('click', () => $('#scanImageInput').click());
   $('#scanImageInput').addEventListener('change', handleScanImage);
+  $('#readLabelPhotoBtn').addEventListener('click', runOcrOnScanImage);
+  $('#clearScanBtn').addEventListener('click', resetScanner);
   $('#parseLabelBtn').addEventListener('click', () => {
     const text = $('#labelText').value.trim();
     if (!text) {
-      renderScanDraft({ strainName: '', type: 'Flower', thc: '', cbd: '', terpenes: '' });
-      toast('Manual draft created.');
+      toast('Paste label text or tap Read label photo first.');
+      setOcrStatus(lastScanImage ? 'Tap Read label photo, or paste copied label text.' : 'Upload a label photo or paste label text first.');
       return;
     }
-    renderScanDraft(parseLabelText(text));
+    const draft = parseLabelText(text);
+    renderScanDraft(draft);
+    setOcrStatus(draft.strainName ? 'Draft created. Review before saving.' : 'Draft created, but strain name needs review.');
     toast('Draft created from label text.');
   });
 

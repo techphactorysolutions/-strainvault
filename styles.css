@@ -1002,3 +1002,23 @@ input[type="range"] {
     flex-direction: column;
   }
 }
+
+/* v3.2 scanner fixes */
+.scanner-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.scan-status {
+  margin-top: 10px;
+  text-align: center;
+}
+.primary-btn:disabled,
+.ghost-btn:disabled,
+.scan-button:disabled {
+  opacity: .46;
+  filter: grayscale(.35);
+  cursor: not-allowed;
+}

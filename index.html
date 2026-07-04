@@ -10,7 +10,7 @@
   <title>StrainVault — Private Cannabis Journal</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="styles.css?v=31" />
+  <link rel="stylesheet" href="styles.css?v=32" />
 </head>
 <body>
   <div class="aurora aurora-one"></div>
@@ -117,7 +117,7 @@
       <div class="section-heading reveal">
         <div>
           <p class="eyebrow">scanner</p>
-          <h2>Photo-first entry</h2>
+          <h2>Smart label scanner</h2>
         </div>
       </div>
       <div class="section-card glass reveal">
@@ -127,15 +127,20 @@
             <span>◉</span>
             Take or upload label photo
           </button>
-          <p>Keep a photo of the package, receipt, or test label. No image leaves this device.</p>
+          <p>Take a clear, close photo of the test label. The app can try to read the text locally, then you review before saving.</p>
           <img id="scanPreview" class="preview-img hidden" alt="Uploaded label preview" />
+          <div class="scanner-actions">
+            <button id="readLabelPhotoBtn" class="primary-btn" type="button" disabled>Read label photo</button>
+            <button id="clearScanBtn" class="ghost-btn" type="button">Clear scan</button>
+          </div>
+          <p id="ocrStatus" class="muted scan-status">Upload a label photo to begin.</p>
         </div>
       </div>
       <div class="section-card glass reveal">
-        <h3>Paste label text</h3>
-        <p class="muted">Take or upload the label photo, then paste label text or use iPhone Live Text to copy text from the package. StrainVault parses the details locally and can fill the strain form for review.</p>
+        <h3>Review label text</h3>
+        <p class="muted">Use <strong>Read label photo</strong>, or paste text copied with iPhone Live Text. StrainVault parses the details on this device and fills a strain card for review.</p>
         <textarea id="labelText" class="glass-textarea" placeholder="Example: Blue Dream, Flower, THC 24.6%, CBD 0.2%, Terpenes: Myrcene, Limonene, Pinene"></textarea>
-        <button id="parseLabelBtn" class="primary-btn full">Create draft from label</button>
+        <button id="parseLabelBtn" class="primary-btn full">Create draft from text</button>
       </div>
       <div id="scanDraft" class="section-card glass hidden"></div>
     </section>
@@ -346,6 +351,6 @@
 
   <div id="toast" class="toast hidden"></div>
 
-  <script src="app.js?v=31"></script>
+  <script src="app.js?v=32"></script>
 </body>
 </html>
