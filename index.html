@@ -10,7 +10,7 @@
   <title>StrainVault — Private Cannabis Journal</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="styles.css?v=34" />
+  <link rel="stylesheet" href="styles.css?v=39" />
 </head>
 <body>
   <div class="aurora aurora-one"></div>
@@ -140,7 +140,10 @@
         <h3>Review label text</h3>
         <p class="muted">Use <strong>Read label photo</strong>, or paste text copied with iPhone Live Text. StrainVault parses the details on this device and fills a strain card for review.</p>
         <textarea id="labelText" class="glass-textarea" placeholder="Paste label text here. Example: Best if Used by Date: 05/11/2027, Produced By: CUL000027, Exact Potency: THC: 250.00 mg/serving, CBD: 0.11 mg/serving, Marijuana Product Approval Number: M00002591076, SHOW BIZ"></textarea>
-        <button id="parseLabelBtn" class="primary-btn full">Create draft from text</button>
+        <div class="button-row wrap scanner-text-actions">
+          <button id="pasteLiveTextBtn" class="ghost-btn" type="button">Paste copied Live Text</button>
+          <button id="parseLabelBtn" class="primary-btn" type="button">Create draft from text</button>
+        </div>
       </div>
       <div id="scanDraft" class="section-card glass hidden"></div>
     </section>
@@ -246,9 +249,25 @@
         <label>Anxiety <input name="anxiety" type="range" min="0" max="10" value="2" /></label>
         <label>Sleepiness <input name="sleepiness" type="range" min="0" max="10" value="4" /></label>
       </div>
+      <div class="review-panel glass-lite">
+        <div class="review-headline">
+          <div>
+            <p class="eyebrow">review score</p>
+            <h3>Rate this strain 1–10</h3>
+          </div>
+          <span class="review-total-pill">Auto average</span>
+        </div>
+        <p class="muted">Score the flower like a real review: visual appearance, smell, taste, effects, and value for the price.</p>
+        <div class="form-grid review-grid">
+          <label>Visual appearance<input name="reviewAppearance" type="number" inputmode="decimal" min="1" max="10" step="0.5" value="5" /></label>
+          <label>Smell / aroma<input name="reviewSmell" type="number" inputmode="decimal" min="1" max="10" step="0.5" value="5" /></label>
+          <label>Taste / flavor<input name="reviewTaste" type="number" inputmode="decimal" min="1" max="10" step="0.5" value="5" /></label>
+          <label>Effects<input name="reviewEffects" type="number" inputmode="decimal" min="1" max="10" step="0.5" value="5" /></label>
+          <label>Price / value<input name="reviewPrice" type="number" inputmode="decimal" min="1" max="10" step="0.5" value="5" /></label>
+        </div>
+      </div>
       <div class="form-grid">
-        <label>Rating<select name="rating"><option value="5">★★★★★ Loved it</option><option value="4">★★★★ Good</option><option value="3">★★★ Okay</option><option value="2">★★ Not great</option><option value="1">★ Avoid</option></select></label>
-        <label>Price<input name="price" type="number" min="0" step="0.01" placeholder="Optional" /></label>
+        <label>Price paid<input name="price" type="number" min="0" step="0.01" placeholder="Optional" /></label>
       </div>
       <label>Notes<textarea name="notes" placeholder="Taste, onset, body feel, anything you want to remember..."></textarea></label>
       <div class="photo-row">
@@ -287,7 +306,10 @@
         <label>Top terpenes<input name="terpenes" placeholder="Myrcene, Limonene" /></label>
       </div>
       <label>Personal notes<textarea name="notes" placeholder="Flavor, smell, body feel, who grew it, or anything you want attached to this strain card..."></textarea></label>
-      <label class="photo-picker">Label photo<input name="labelPhoto" type="file" accept="image/*" capture="environment" /></label>
+      <div class="photo-row">
+        <label class="photo-picker">Strain photo<input name="strainPhoto" type="file" accept="image/*" capture="environment" /></label>
+        <label class="photo-picker">Label photo<input name="labelPhoto" type="file" accept="image/*" capture="environment" /></label>
+      </div>
       <div class="button-row wrap">
         <button id="strainSaveBtn" class="primary-btn" type="submit">Save strain</button>
         <button id="strainDeleteBtn" class="ghost-btn danger hidden" type="button">Delete</button>
@@ -328,8 +350,8 @@
     <canvas id="strainCanvas" width="1080" height="1350" class="profile-canvas"></canvas>
     <div class="button-row wrap">
       <button id="renderStrainCardBtn" class="primary-btn">Refresh card</button>
-      <button id="shareStrainCardBtn" class="ghost-btn">Share PNG</button>
-      <a id="downloadStrainCardLink" class="ghost-btn" download="strainvault-strain-card.png">Download PNG</a>
+      <button id="shareStrainCardBtn" class="ghost-btn">Share JPEG</button>
+      <a id="downloadStrainCardLink" class="ghost-btn" download="strainvault-strain-card.jpg">Download JPEG</a>
     </div>
   </section>
 
@@ -351,6 +373,6 @@
 
   <div id="toast" class="toast hidden"></div>
 
-  <script src="app.js?v=35"></script>
+  <script src="app.js?v=39"></script>
 </body>
 </html>

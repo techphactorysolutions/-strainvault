@@ -25,7 +25,7 @@ function getStorage() {
 const localStore = getStorage();
 
 const DEFAULT_STATE = {
-  version: 35,
+  version: 39,
   createdAt: new Date().toISOString(),
   strains: [],
   sessions: [],
@@ -50,6 +50,13 @@ let sharingStrainId = '';
 let pendingStrainLabelPhoto = '';
 let pendingStrainLabelDetails = null;
 
+const REVIEW_FIELDS = [
+  { key: 'appearance', formName: 'reviewAppearance', label: 'Appearance' },
+  { key: 'smell', formName: 'reviewSmell', label: 'Smell' },
+  { key: 'taste', formName: 'reviewTaste', label: 'Taste' },
+  { key: 'effects', formName: 'reviewEffects', label: 'Effects' },
+  { key: 'price', formName: 'reviewPrice', label: 'Price' }
+];
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -88,7 +95,13 @@ function formatMoney(value) {
 }
 
 function b64FromBytes(bytes) {
-  return btoa(String.fromCharCode(...new Uint8Array(bytes)));
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < view.length; i += chunkSize) {
+    binary += String.fromCharCode(...view.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
 }
 
 function bytesFromB64(base64) {
@@ -275,9 +288,9 @@ function openStrainEditor(strainId = '', prefill = {}) {
   $('#strainDeleteBtn').classList.toggle('hidden', !strain);
   const status = $('#strainScannerStatus');
   if (status) {
-    const hasPhoto = Boolean(pendingStrainLabelPhoto || strain?.labelPhoto);
+    const hasPhoto = Boolean(pendingStrainLabelPhoto || strain?.labelPhoto || strain?.strainPhoto);
     status.textContent = hasPhoto
-      ? 'Label photo attached locally. Text details will save with this strain card.'
+      ? 'Photos attached locally. They will save with this strain card and shareable export.'
       : 'Optional: use scanner assist to fill this card from package text.';
   }
   setFormValue(form, 'id', strain?.id || '');
@@ -309,7 +322,8 @@ function openSessionEditor(sessionId = '', strainName = '') {
   setSelectValue(form, 'mood', session?.mood || 'Neutral');
   setSelectValue(form, 'intent', session?.intent || 'Relax');
   ['calm','energy','clarity','anxiety','sleepiness'].forEach(name => setFormValue(form, name, session?.effects?.[name] ?? form.elements[name]?.defaultValue ?? 0));
-  setSelectValue(form, 'rating', session?.rating || '5');
+  const review = normalizeReviewScores(session?.review, session?.rating);
+  REVIEW_FIELDS.forEach(field => setFormValue(form, field.formName, review[field.key]));
   setFormValue(form, 'price', session?.price || '');
   setFormValue(form, 'notes', session?.notes || '');
   openModal('logModal');
@@ -343,6 +357,7 @@ function upsertStrainFromSession(session) {
     existing.thc = session.thc || existing.thc;
     existing.cbd = session.cbd || existing.cbd;
     existing.terpenes = uniqueList([...(existing.terpenes || []), ...sessionTerpenes]);
+    existing.strainPhoto = session.strainPhoto || existing.strainPhoto || '';
     existing.labelPhoto = session.labelPhoto || existing.labelPhoto;
     existing.labelDetails = session.labelDetails || existing.labelDetails || null;
     existing.updatedAt = new Date().toISOString();
@@ -356,6 +371,7 @@ function upsertStrainFromSession(session) {
     thc: session.thc,
     cbd: session.cbd,
     terpenes: sessionTerpenes,
+    strainPhoto: session.strainPhoto || '',
     labelPhoto: session.labelPhoto,
     labelDetails: session.labelDetails || null,
     createdAt: new Date().toISOString(),
@@ -368,10 +384,11 @@ function upsertStrainFromSession(session) {
 function parseList(value) {
   if (Array.isArray(value)) return value.filter(Boolean).map(item => String(item).trim()).filter(Boolean);
   return String(value || '')
-    .split(/[,.|/]+/)
+    .replace(/mg\s*\/\s*serv(?:ing)?/gi, 'mg per serving')
+    .split(/[,;|\n]+/)
     .map(item => item.trim())
     .filter(Boolean)
-    .slice(0, 8);
+    .slice(0, 12);
 }
 
 function uniqueList(items) {
@@ -394,14 +411,92 @@ function average(values) {
   return nums.reduce((sum, value) => sum + value, 0) / nums.length;
 }
 
+function clampReviewScore(value, fallback = 5) {
+  const parsed = Number(value);
+  if (Number.isNaN(parsed) || parsed <= 0) return fallback;
+  return Number(Math.min(10, Math.max(1, parsed)).toFixed(1));
+}
+
+function legacyRatingToTen(rating) {
+  const parsed = Number(rating);
+  if (Number.isNaN(parsed) || parsed <= 0) return 5;
+  if (parsed <= 5) return clampReviewScore(parsed * 2, 5);
+  return clampReviewScore(parsed, 5);
+}
+
+function normalizeReviewScores(review = {}, legacyRating = '') {
+  const fallback = legacyRatingToTen(legacyRating);
+  const source = review && typeof review === 'object' ? review : {};
+  return REVIEW_FIELDS.reduce((result, field) => {
+    result[field.key] = clampReviewScore(source[field.key], fallback);
+    return result;
+  }, {});
+}
+
+function collectReviewFromData(data) {
+  return REVIEW_FIELDS.reduce((review, field) => {
+    review[field.key] = clampReviewScore(data.get(field.formName), 5);
+    return review;
+  }, {});
+}
+
+function getSessionReviewOverall(session = {}) {
+  const hasReview = session.review && typeof session.review === 'object' && REVIEW_FIELDS.some(field => Number(session.review[field.key]) > 0);
+  if (!hasReview && !session.rating) return 0;
+  const review = normalizeReviewScores(session.review, session.rating);
+  return Number(average(REVIEW_FIELDS.map(field => review[field.key])).toFixed(1));
+}
+
+function getSessionReviewPercent(session = {}) {
+  const overall = getSessionReviewOverall(session);
+  return overall ? Math.round(overall * 10) : 0;
+}
+
+function getAverageReviewForStrain(name) {
+  const sessions = sessionsForStrain(name);
+  const reviewedSessions = sessions.filter(session => getSessionReviewOverall(session));
+  const overallScores = reviewedSessions.map(getSessionReviewOverall).filter(Boolean);
+  if (!overallScores.length) return null;
+  const categories = REVIEW_FIELDS.reduce((result, field) => {
+    result[field.key] = average(reviewedSessions.map(session => normalizeReviewScores(session.review, session.rating)[field.key]));
+    return result;
+  }, {});
+  return {
+    overall: Number(average(overallScores).toFixed(1)),
+    categories
+  };
+}
+
+function renderReviewChipsFromSession(session = {}, limit = 5) {
+  const review = normalizeReviewScores(session.review, session.rating);
+  const overall = getSessionReviewOverall(session);
+  if (!overall) return '';
+  const chips = [`Overall ${overall}/10`, ...REVIEW_FIELDS.map(field => `${field.label} ${review[field.key]}/10`)];
+  return `<div class="review-chip-row">${chips.slice(0, limit + 1).map(chip => `<span class="review-chip">${escapeHtml(chip)}</span>`).join('')}</div>`;
+}
+
+function renderStrainReviewSummary(name) {
+  const review = getAverageReviewForStrain(name);
+  if (!review) return '<div class="review-summary muted">No 1–10 reviews yet.</div>';
+  const topCategories = REVIEW_FIELDS
+    .map(field => ({ ...field, value: review.categories[field.key] || 0 }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 3);
+  return `
+    <div class="review-summary">
+      <span class="review-overall">${review.overall}/10</span>
+      <div>
+        <strong>Average strain review</strong>
+        <div class="review-chip-row">${topCategories.map(field => `<span class="review-chip">${escapeHtml(field.label)} ${field.value.toFixed(1).replace('.0', '')}/10</span>`).join('')}</div>
+      </div>
+    </div>
+  `;
+}
+
 function strainScore(strain) {
-  const sessions = sessionsForStrain(strain.name);
-  if (!sessions.length) return 50;
-  const rating = average(sessions.map(session => Number(session.rating || 0))) * 20;
-  const anxietyPenalty = average(sessions.map(session => Number(session.effects?.anxiety || 0))) * 2.2;
-  const clarityBonus = average(sessions.map(session => Number(session.effects?.clarity || 0))) * 1.5;
-  const calmBonus = average(sessions.map(session => Number(session.effects?.calm || 0))) * 1.2;
-  return Math.round(clampNumber(rating + clarityBonus + calmBonus - anxietyPenalty, 0, 100));
+  const review = getAverageReviewForStrain(strain.name);
+  if (!review) return 50;
+  return Math.round(clampNumber(review.overall * 10, 0, 100));
 }
 
 function getTopStrainForIntent(intent) {
@@ -411,7 +506,7 @@ function getTopStrainForIntent(intent) {
   matching.forEach(session => {
     const key = normalizeName(session.strainName);
     const current = grouped.get(key) || { name: session.strainName, scores: [], sessions: 0 };
-    current.scores.push(Number(session.rating || 0) * 20 - Number(session.effects?.anxiety || 0) * 3);
+    current.scores.push((getSessionReviewPercent(session) || Number(session.rating || 0) * 20) - Number(session.effects?.anxiety || 0) * 2);
     current.sessions += 1;
     grouped.set(key, current);
   });
@@ -429,7 +524,7 @@ function getProfileStats() {
   const favoriteTerpene = [...terpeneCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || 'Not enough data';
   const best = state.strains.length ? [...state.strains].sort((a, b) => strainScore(b) - strainScore(a))[0] : null;
   const avgThc = average(state.strains.map(strain => Number(strain.thc || 0)).filter(Boolean));
-  const avgRating = average(state.sessions.map(session => Number(session.rating || 0)));
+  const avgRating = average(state.sessions.map(getSessionReviewOverall).filter(Boolean));
   return {
     totalSessions: state.sessions.length,
     totalStrains: state.strains.length,
@@ -523,6 +618,8 @@ function renderLabelDetailSummary(strain = {}) {
     ['Best by', details.bestUsedBy],
     ['Produced by', details.producedBy],
     ['Testing lic.', details.testingLicense],
+    ['Testing tag', details.testingTag],
+    ['Source tag', details.sourceTag],
     ['Weight', details.totalWeight],
     ['Approval #', details.marijuanaApprovalNumber]
   ].filter(([, value]) => value);
@@ -530,9 +627,27 @@ function renderLabelDetailSummary(strain = {}) {
   return `<div class="label-summary">${items.map(([label, value]) => `<span><small>${escapeHtml(label)}</small>${escapeHtml(value)}</span>`).join('')}</div>`;
 }
 
+function getDisplayStrainPhoto(strain = {}, sessions = []) {
+  return strain.strainPhoto || strain.photo || strain.labelPhoto || sessions.find(session => session.labelPhoto)?.labelPhoto || '';
+}
+
+function slugifyName(value = 'strain') {
+  return String(value || 'strain').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'strain';
+}
+
+function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Image failed to load'));
+    img.src = src;
+  });
+}
+
 function renderStrainCard(strain) {
   const score = strainScore(strain);
   const sessions = sessionsForStrain(strain.name);
+  const displayPhoto = getDisplayStrainPhoto(strain, sessions);
   const tags = [strain.type, strain.thc ? `${strain.thc}% THC` : '', strain.cbd ? `${strain.cbd}% CBD` : '', ...(strain.terpenes || [])].filter(Boolean);
   const bestEffects = summarizeEffects(sessions);
   return `
@@ -542,8 +657,10 @@ function renderStrainCard(strain) {
           <h3>${escapeHtml(strain.name)}</h3>
           <p>${escapeHtml(strain.brand || 'No brand saved')} · ${sessions.length} session${sessions.length === 1 ? '' : 's'}</p>
         </div>
-        ${strain.labelPhoto ? `<img class="photo-thumb" src="${strain.labelPhoto}" alt="${escapeHtml(strain.name)} label" />` : `<span class="score-pill">${score}/100</span>`}
+        ${displayPhoto ? `<img class="photo-thumb" src="${displayPhoto}" alt="${escapeHtml(strain.name)} photo" />` : `<span class="score-pill">${score}/100</span>`}
       </div>
+      ${displayPhoto ? `<div class="tag-row"><span class="score-pill">${score}/100</span></div>` : ''}
+      ${renderStrainReviewSummary(strain.name)}
       <div class="tag-row">${tags.map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}</div>
       <div class="effect-row">${bestEffects.map(effect => `<span class="effect-chip">${escapeHtml(effect)}</span>`).join('')}</div>
       ${renderLabelDetailSummary(strain)}
@@ -589,8 +706,9 @@ function renderJournalCard(session) {
           <h3>${escapeHtml(session.strainName)}</h3>
           <p>${formatDate(session.createdAt)} · ${escapeHtml(session.intent || 'Session')}</p>
         </div>
-        ${session.labelPhoto ? `<img class="photo-thumb" src="${session.labelPhoto}" alt="label photo" />` : `<span class="score-pill">${'★'.repeat(Number(session.rating || 0))}</span>`}
+        ${session.labelPhoto ? `<img class="photo-thumb" src="${session.labelPhoto}" alt="label photo" />` : `<span class="score-pill">${getSessionReviewOverall(session) || legacyRatingToTen(session.rating)}/10</span>`}
       </div>
+      ${renderReviewChipsFromSession(session)}
       <div class="effect-row">
         <span class="effect-chip">Calm ${effects.calm ?? 0}/10</span>
         <span class="effect-chip">Energy ${effects.energy ?? 0}/10</span>
@@ -611,7 +729,7 @@ function renderInsights() {
   $('#profileDashboard').innerHTML = [
     metricCard('Body score leader', stats.bestStrain ? escapeHtml(stats.bestStrain.name) : '—', stats.bestStrain ? `${strainScore(stats.bestStrain)}/100 personal score` : 'log more sessions'),
     metricCard('Average THC', stats.avgThc ? `${stats.avgThc.toFixed(1)}%` : '—', 'from saved strains'),
-    metricCard('Average rating', stats.avgRating ? `${stats.avgRating.toFixed(1)}/5` : '—', 'your personal ratings'),
+    metricCard('Average review', stats.avgRating ? `${stats.avgRating.toFixed(1)}/10` : '—', 'appearance, smell, taste, effects, price'),
     metricCard('Favorite terpene', escapeHtml(stats.favoriteTerpene), 'based on saved labels')
   ].join('');
 
@@ -703,6 +821,7 @@ async function handleStrainSubmit(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const data = new FormData(form);
+  const strainPhoto = await readOptionalImageFile(data.get('strainPhoto'), 'Strain photo', 1500, 0.88);
   const labelPhoto = await readOptionalImageFile(data.get('labelPhoto'), 'Label photo');
   const name = String(data.get('name') || '').trim();
   if (!name) {
@@ -728,6 +847,7 @@ async function handleStrainSubmit(event) {
   target.cbd = data.get('cbd') ? formatCannabinoidPercent(data.get('cbd')) : '';
   target.terpenes = parseList(String(data.get('terpenes') || ''));
   target.notes = String(data.get('notes') || '').trim();
+  target.strainPhoto = strainPhoto || target.strainPhoto || '';
   target.labelPhoto = labelPhoto || pendingStrainLabelPhoto || target.labelPhoto || '';
   target.labelDetails = pendingStrainLabelDetails || target.labelDetails || null;
   target.updatedAt = new Date().toISOString();
@@ -768,6 +888,8 @@ async function handleLogSubmit(event) {
   const existing = state.sessions.find(session => session.id === editingSessionId);
   const labelPhoto = await readOptionalImageFile(data.get('labelPhoto'), 'Label photo');
   const receiptPhoto = await readOptionalImageFile(data.get('receiptPhoto'), 'Receipt photo');
+  const review = collectReviewFromData(data);
+  const overallReview = getSessionReviewOverall({ review });
   const session = {
     id: existing?.id || uid('session'),
     strainName: String(data.get('strainName') || '').trim(),
@@ -785,7 +907,9 @@ async function handleLogSubmit(event) {
       anxiety: Number(data.get('anxiety') || 0),
       sleepiness: Number(data.get('sleepiness') || 0)
     },
-    rating: Number(data.get('rating') || 0),
+    review,
+    reviewOverall: overallReview,
+    rating: Number((overallReview / 2).toFixed(1)),
     price: data.get('price') ? Number(data.get('price')) : '',
     notes: String(data.get('notes') || '').trim(),
     labelPhoto: labelPhoto || existing?.labelPhoto || '',
@@ -943,7 +1067,7 @@ async function runOcrOnScanImage() {
   if (ocrBusy) return;
   ocrBusy = true;
   setScanButtonsEnabled(true);
-  setOcrStatus('Reading label photo… keep this page open. Close, bright label photos work best.');
+  setOcrStatus('Reading label photo… this is best-effort. For tiny test-label tables, use iPhone Live Text paste for higher accuracy.');
   try {
     const texts = [];
     let nativeText = await tryNativeTextDetector();
@@ -990,7 +1114,7 @@ async function runOcrOnScanImage() {
     renderScanDraft(draft);
     const missing = scannerDraftMissingFields(draft);
     if (missing.length) {
-      setOcrStatus(`Label read with ${draft.confidence || 0}% confidence. Review missing: ${missing.join(', ')}. Brand logos may need manual correction.`);
+      setOcrStatus(`Best-effort read: ${draft.confidence || 0}% confidence. Review/correct: ${missing.join(', ')}. Use Live Text paste if the values look wrong.`);
     } else {
       setOcrStatus(`Label read with ${draft.confidence || 0}% confidence. Review and save the strain card.`);
     }
@@ -1324,13 +1448,17 @@ function extractExactPotency(all) {
   const section = extractSection(all, /Exact\s+Potency/i, [/Terpene\s+Profile/i, /Instructions\s+for\s+Use/i, /Marijuana\s+Product\s+Approval/i, /Warning/i]);
   const profile = {};
   if (!section) return profile;
-  const compact = compactOcrText(section).replace(/D\s*9/gi, 'D9');
+  const compact = compactOcrText(section)
+    .replace(/D\s*9/gi, 'D9')
+    .replace(/Delta\s*9/gi, 'D9')
+    .replace(/Δ\s*9/gi, 'D9')
+    .replace(/D9\s*[-–—]?\s*THC/gi, 'D9THC');
 
   for (const [key, labelRegex] of POTENCY_LABELS) {
-    const label = labelRegex.source;
+    const label = key === 'Δ9 THC' ? '(?:D9THC|D9\\s*[-–—]?\\s*THC|Delta\\s*9\\s*THC|Δ9\\s*THC)' : labelRegex.source;
     const regexes = [
       new RegExp(`(?:${label})\\s*[:#\\-]?\\s*(\\d{1,4}(?:\\.\\d{1,3})?)\\s*(?:mg|milligram|%)?`, 'i'),
-      new RegExp(`(?:${label})[^0-9]{0,16}(\\d{1,4}(?:\\.\\d{1,3})?)\\s*(?:mg|milligram|%)?`, 'i')
+      new RegExp(`(?:${label})[^0-9]{0,20}(\\d{1,4}(?:\\.\\d{1,3})?)\\s*(?:mg|milligram|%)?`, 'i')
     ];
     for (const regex of regexes) {
       const match = compact.match(regex);
@@ -1599,6 +1727,54 @@ function formatProfile(profile = {}, suffix = '%') {
     .join(', ');
 }
 
+
+function readLabelDetailsFromFormData(data, baseDetails = {}) {
+  const details = { ...(baseDetails || {}) };
+  const fieldMap = [
+    'bestUsedBy', 'producedBy', 'testingLicense', 'testingTag', 'sourceTag',
+    'totalWeight', 'servingsPerPackage', 'marijuanaApprovalNumber',
+    'packageDate', 'testDate', 'expirationDate', 'lab', 'license',
+    'exactPotencyText', 'terpeneProfileText', 'instructions'
+  ];
+  fieldMap.forEach(key => {
+    const value = cleanLabelValue(data.get(key) || '');
+    if (value) details[key] = value;
+    else if (key in details) delete details[key];
+  });
+  return details;
+}
+
+function draftNeedsManualReview(draft = {}) {
+  const badName = !draft.strainName || isBadNameCandidate(draft.strainName) || /^M?0{2,}\d/i.test(draft.strainName) || /approval|number|license|testing|source|potency/i.test(draft.strainName);
+  const weakName = draft.strainName && draft.strainName.replace(/[^A-Za-z]/g, '').length < 4;
+  const missingPotency = !draft.thc && !draft.cbd;
+  return Boolean(badName || weakName || missingPotency || (draft.confidence || 0) < 60);
+}
+
+function sanitizeScannerDraft(draft = {}) {
+  const clean = { ...draft, details: { ...(draft.details || {}) } };
+  const warnings = [];
+  if (!clean.strainName || isBadNameCandidate(clean.strainName) || /^M?0{2,}\d/i.test(clean.strainName) || /approval|number|license|testing|source|potency/i.test(clean.strainName) || clean.strainName.replace(/[^A-Za-z]/g, '').length < 4) {
+    if (clean.strainName) warnings.push(`Ignored weak strain-name guess: "${clean.strainName}".`);
+    clean.strainName = '';
+  }
+  if (clean.thc && Number(clean.thc) > 45) {
+    warnings.push(`THC value "${clean.thc}%" looks unusually high for flower. Review against the label.`);
+  }
+  if (!clean.thc && Object.keys(clean.details?.exactPotencyMg || {}).length) {
+    warnings.push('Exact potency was detected, but Total THC needs review.');
+  }
+  if (!clean.cbd && Object.keys(clean.details?.exactPotencyMg || {}).length) {
+    warnings.push('CBD was not confidently detected from the potency table.');
+  }
+  if (!clean.brand && clean.details?.producedBy) {
+    clean.brand = clean.details.producedBy;
+  }
+  clean.warnings = warnings;
+  clean.needsManualReview = draftNeedsManualReview(clean);
+  return clean;
+}
+
 function buildLabelNotes(draft, raw) {
   const details = draft.details || {};
   const lines = ['Auto-filled from label scanner. Review values against the physical label before relying on them.'];
@@ -1612,8 +1788,10 @@ function buildLabelNotes(draft, raw) {
   if (details.marijuanaApprovalNumber) lines.push(`Marijuana product approval #: ${details.marijuanaApprovalNumber}`);
   if (details.totalTerpenes) lines.push(`Total terpenes: ${details.totalTerpenes}%`);
   if (Object.keys(details.exactPotencyMg || {}).length) lines.push(`Exact potency mg/serving: ${formatProfile(details.exactPotencyMg, ' mg')}`);
+  else if (details.exactPotencyText) lines.push(`Exact potency: ${details.exactPotencyText}`);
   if (Object.keys(details.exactPotencyPercent || {}).length) lines.push(`Estimated potency percent: ${formatProfile(details.exactPotencyPercent, '%')}`);
   if (Object.keys(details.terpeneProfile || {}).length) lines.push(`Terpene profile mg/serving: ${formatProfile(details.terpeneProfile, ' mg')}`);
+  else if (details.terpeneProfileText) lines.push(`Terpene profile: ${details.terpeneProfileText}`);
   if (details.packageDate) lines.push(`Packaged: ${details.packageDate}`);
   if (details.harvestDate) lines.push(`Harvested: ${details.harvestDate}`);
   if (details.testDate) lines.push(`Tested: ${details.testDate}`);
@@ -1668,7 +1846,7 @@ function parseLabelText(text) {
   };
   draft.notes = buildLabelNotes(draft, raw);
   draft.confidence = scannerConfidence(draft);
-  return draft;
+  return sanitizeScannerDraft(draft);
 }
 
 function scoreOcrText(text = '') {
@@ -1858,18 +2036,24 @@ async function createOcrVariants(dataUrl) {
 
 function scanDraftFromForm(form) {
   const data = new FormData(form);
-  let details = null;
+  let baseDetails = null;
   try {
-    details = data.get('labelDetailsJson') ? JSON.parse(String(data.get('labelDetailsJson'))) : null;
+    baseDetails = data.get('labelDetailsJson') ? JSON.parse(String(data.get('labelDetailsJson'))) : null;
   } catch (error) {
-    details = null;
+    baseDetails = null;
   }
+  const details = readLabelDetailsFromFormData(data, baseDetails || {});
+  const thc = data.get('thc') ? formatCannabinoidPercent(data.get('thc')) : '';
+  const cbd = data.get('cbd') ? formatCannabinoidPercent(data.get('cbd')) : '';
+  details.cannabinoids = { ...(details.cannabinoids || {}) };
+  if (thc) details.cannabinoids['Total THC'] = thc;
+  if (cbd) details.cannabinoids['Total CBD'] = cbd;
   return {
     strainName: String(data.get('strainName') || '').trim(),
     brand: String(data.get('brand') || '').trim(),
     type: String(data.get('type') || 'Flower'),
-    thc: data.get('thc') ? formatCannabinoidPercent(data.get('thc')) : '',
-    cbd: data.get('cbd') ? formatCannabinoidPercent(data.get('cbd')) : '',
+    thc,
+    cbd,
     terpenes: String(data.get('terpenes') || '').trim(),
     notes: String(data.get('notes') || '').trim(),
     labelPhoto: lastScanImage,
@@ -1880,9 +2064,9 @@ function scanDraftFromForm(form) {
 
 function renderScannerDetailGrid(draft = {}) {
   const details = draft.details || {};
-  const exactMg = formatProfile(details.exactPotencyMg || {}, ' mg');
+  const exactMg = details.exactPotencyText || formatProfile(details.exactPotencyMg || {}, ' mg');
   const exactPercent = formatProfile(details.exactPotencyPercent || {}, '%');
-  const terpeneProfile = formatProfile(details.terpeneProfile || {}, ' mg');
+  const terpeneProfile = details.terpeneProfileText || formatProfile(details.terpeneProfile || {}, ' mg');
   const values = [
     ['Confidence', `${draft.confidence || 0}%`],
     ['Strain name', draft.strainName || 'Needs review'],
@@ -1910,24 +2094,50 @@ function renderScannerDetailGrid(draft = {}) {
 }
 
 function renderScanDraft(draft) {
+  const cleanedDraft = sanitizeScannerDraft(draft || {});
   $('#scanDraft').classList.remove('hidden');
-  const quality = draft.confidence >= 80 ? 'strong capture' : draft.confidence >= 55 ? 'review needed' : 'low confidence';
+  const quality = cleanedDraft.confidence >= 80 ? 'strong capture' : cleanedDraft.confidence >= 55 ? 'review needed' : 'low confidence';
+  const warnings = cleanedDraft.warnings || [];
+  const details = cleanedDraft.details || {};
+  const exactMgText = details.exactPotencyText || formatProfile(details.exactPotencyMg || {}, ' mg');
+  const terpeneText = details.terpeneProfileText || formatProfile(details.terpeneProfile || {}, ' mg');
   $('#scanDraft').innerHTML = `
     <p class="eyebrow">scanner draft · ${escapeHtml(quality)}</p>
-    <h3>${escapeHtml(draft.strainName || 'Review detected label')}</h3>
-    <p class="muted">StrainVault auto-filled the fields it could read. Cannabis labels vary a lot, so compare the name, THC/CBD, exact potency, dates, tags, and license numbers against the package before saving.</p>
-    ${renderScannerDetailGrid(draft)}
+    <h3>${escapeHtml(cleanedDraft.strainName || 'Review detected label')}</h3>
+    <p class="muted">The photo reader now uses strict review mode: it only fills fields it can read with reasonable confidence. Correct the fields below before saving. For tiny label tables, iPhone Live Text usually reads better than in-browser OCR.</p>
+    ${warnings.length ? `<div class="scanner-warning">${warnings.map(item => `<p>${escapeHtml(item)}</p>`).join('')}</div>` : ''}
+    ${renderScannerDetailGrid(cleanedDraft)}
     <form id="scanDraftForm" class="flow-form">
-      <textarea name="labelDetailsJson" hidden>${escapeHtml(JSON.stringify(draft.details || {}))}</textarea>
+      <textarea name="labelDetailsJson" hidden>${escapeHtml(JSON.stringify(cleanedDraft.details || {}))}</textarea>
       <div class="form-grid">
-        <label>Strain name<input name="strainName" value="${escapeHtml(draft.strainName || '')}" required placeholder="Type strain name if missed" /></label>
-        <label>Brand / grower<input name="brand" value="${escapeHtml(draft.brand || '')}" placeholder="Brand may need manual review if it is only a logo" /></label>
-        <label>Product type<select name="type">${['Flower','Cart','Edible','Concentrate','Pre-roll','Tincture'].map(type => `<option ${type === draft.type ? 'selected' : ''}>${type}</option>`).join('')}</select></label>
-        <label>THC %<input name="thc" type="number" step="0.1" value="${escapeHtml(draft.thc || '')}" placeholder="Total THC" /></label>
-        <label>CBD %<input name="cbd" type="number" step="0.1" value="${escapeHtml(draft.cbd || '')}" placeholder="Total CBD" /></label>
-        <label>Top terpenes<input name="terpenes" value="${escapeHtml(draft.terpenes || '')}" placeholder="Myrcene, Limonene" /></label>
+        <label>Strain name<input name="strainName" value="${escapeHtml(cleanedDraft.strainName || '')}" required placeholder="Example: Show Biz" /></label>
+        <label>Brand / grower<input name="brand" value="${escapeHtml(cleanedDraft.brand || '')}" placeholder="Brand or produced-by license" /></label>
+        <label>Product type<select name="type">${['Flower','Cart','Edible','Concentrate','Pre-roll','Tincture'].map(type => `<option ${type === cleanedDraft.type ? 'selected' : ''}>${type}</option>`).join('')}</select></label>
+        <label>THC %<input name="thc" type="number" step="0.01" value="${escapeHtml(cleanedDraft.thc || '')}" placeholder="Total THC" /></label>
+        <label>CBD %<input name="cbd" type="number" step="0.01" value="${escapeHtml(cleanedDraft.cbd || '')}" placeholder="Total CBD" /></label>
+        <label>Top terpenes<input name="terpenes" value="${escapeHtml(cleanedDraft.terpenes || '')}" placeholder="Limonene, Beta Caryophyllene" /></label>
       </div>
-      <label>Captured label details<textarea name="notes" placeholder="Batch, cannabinoid table, package details...">${escapeHtml(draft.notes || '')}</textarea></label>
+      <details class="scanner-review-box" open>
+        <summary>Package label facts</summary>
+        <div class="form-grid label-facts-grid">
+          <label>Best if used by<input name="bestUsedBy" value="${escapeHtml(details.bestUsedBy || '')}" placeholder="05/11/2027" /></label>
+          <label>Produced by<input name="producedBy" value="${escapeHtml(details.producedBy || '')}" placeholder="CUL000027" /></label>
+          <label>Testing license #<input name="testingLicense" value="${escapeHtml(details.testingLicense || '')}" placeholder="TES000005" /></label>
+          <label>Testing tag #<input name="testingTag" value="${escapeHtml(details.testingTag || '')}" placeholder="1A40..." /></label>
+          <label>Source tag #<input name="sourceTag" value="${escapeHtml(details.sourceTag || '')}" placeholder="1A40..." /></label>
+          <label>Total weight<input name="totalWeight" value="${escapeHtml(details.totalWeight || '')}" placeholder="3.620 g" /></label>
+          <label>Servings/doses<input name="servingsPerPackage" value="${escapeHtml(details.servingsPerPackage || '')}" placeholder="3.620 g" /></label>
+          <label>Approval #<input name="marijuanaApprovalNumber" value="${escapeHtml(details.marijuanaApprovalNumber || '')}" placeholder="M00002591076" /></label>
+          <label>Package date<input name="packageDate" value="${escapeHtml(details.packageDate || '')}" /></label>
+          <label>Test date<input name="testDate" value="${escapeHtml(details.testDate || '')}" /></label>
+          <label>Expiration date<input name="expirationDate" value="${escapeHtml(details.expirationDate || '')}" /></label>
+          <label>Testing lab<input name="lab" value="${escapeHtml(details.lab || '')}" /></label>
+        </div>
+        <label>Exact potency table<textarea name="exactPotencyText" placeholder="THC: 250 mg/serving, CBD: 0.11 mg/serving">${escapeHtml(exactMgText || '')}</textarea></label>
+        <label>Terpene profile<textarea name="terpeneProfileText" placeholder="Limonene 4.44 mg/serving, Beta Caryophyllene 1.83 mg/serving">${escapeHtml(terpeneText || '')}</textarea></label>
+        <label>Instructions / length of effect<textarea name="instructions" placeholder="Use instructions from the label">${escapeHtml(details.instructions || '')}</textarea></label>
+      </details>
+      <label>Captured label notes<textarea name="notes" placeholder="Batch, cannabinoid table, package details...">${escapeHtml(cleanedDraft.notes || '')}</textarea></label>
       <div class="button-row wrap">
         <button class="primary-btn" type="submit">Save strain card</button>
         <button id="applyScanDraftBtn" class="ghost-btn" type="button">Apply to strain form</button>
@@ -2000,7 +2210,7 @@ async function handleScanImage(event) {
   toast('Photo attached. Tap Read label photo to fill bud info.');
 }
 
-function openStrainShare(strainId) {
+async function openStrainShare(strainId) {
   sharingStrainId = strainId || '';
   const strain = state.strains.find(item => item.id === sharingStrainId);
   if (!strain) {
@@ -2009,123 +2219,165 @@ function openStrainShare(strainId) {
   }
   $('#strainShareTitle').textContent = `${strain.name} card`;
   openModal('strainShareModal');
-  renderStrainShareCard();
+  await renderStrainShareCard();
 }
 
-function renderStrainShareCard() {
+async function renderStrainShareCard() {
   const strain = state.strains.find(item => item.id === sharingStrainId);
   if (!strain) return;
   const canvas = $('#strainCanvas');
   const ctx = canvas.getContext('2d');
   const w = canvas.width;
   const h = canvas.height;
-  const score = strainScore(strain);
   const sessions = sessionsForStrain(strain.name);
   const effects = summarizeEffects(sessions);
   const tags = [strain.type, strain.thc ? `${strain.thc}% THC` : '', strain.cbd ? `${strain.cbd}% CBD` : '', ...(strain.terpenes || [])].filter(Boolean);
+  const review = getAverageReviewForStrain(strain.name);
+  const overallReview = review?.overall || 0;
+  const displayPhoto = getDisplayStrainPhoto(strain, sessions);
 
   const gradient = ctx.createLinearGradient(0, 0, w, h);
-  gradient.addColorStop(0, '#101620');
-  gradient.addColorStop(.42, '#123421');
-  gradient.addColorStop(.72, '#32204c');
-  gradient.addColorStop(1, '#161a24');
+  gradient.addColorStop(0, '#0f1722');
+  gradient.addColorStop(.42, '#143624');
+  gradient.addColorStop(.72, '#2f1f47');
+  gradient.addColorStop(1, '#141922');
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, w, h);
 
-  ctx.globalAlpha = .45;
-  for (let i = 0; i < 22; i += 1) {
+  ctx.globalAlpha = .28;
+  for (let i = 0; i < 14; i += 1) {
     ctx.beginPath();
     ctx.fillStyle = ['#52f28b', '#ffd166', '#9d7cff', '#76d9ff', '#ff7ab6'][i % 5];
-    ctx.arc((i * 97) % w, (i * 173) % h, 55 + (i % 5) * 24, 0, Math.PI * 2);
+    ctx.arc((i * 133) % w, (i * 211) % h, 38 + (i % 5) * 22, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.globalAlpha = 1;
 
-  roundRect(ctx, 70, 70, w - 140, h - 140, 58, 'rgba(255,255,255,.13)', 'rgba(255,255,255,.28)');
+  roundRect(ctx, 60, 60, w - 120, h - 120, 52, 'rgba(255,255,255,.10)', 'rgba(255,255,255,.24)');
+
+  // header
   ctx.fillStyle = '#f7f2e8';
-  ctx.font = '900 54px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
-  ctx.fillText('StrainVault', 120, 155);
-  ctx.font = '700 27px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+  ctx.font = '900 48px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+  ctx.fillText('StrainVault', 100, 140);
+  ctx.font = '700 24px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
   ctx.fillStyle = '#b8ff7a';
-  ctx.fillText('SHAREABLE STRAIN CARD', 120, 202);
+  ctx.fillText('SHAREABLE STRAIN CARD', 100, 180);
 
-  ctx.fillStyle = '#f7f2e8';
-  ctx.font = '900 86px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
-  wrapText(ctx, strain.name, 120, 330, 800, 92);
-
-  ctx.font = '700 31px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
-  ctx.fillStyle = 'rgba(247,242,232,.78)';
-  const brandLine = `${strain.brand || 'No brand saved'} · ${sessions.length} session${sessions.length === 1 ? '' : 's'} logged`;
-  wrapText(ctx, brandLine, 120, 500, 820, 38);
-
-  roundRect(ctx, 120, 590, 300, 160, 34, 'rgba(184,255,122,.16)', 'rgba(184,255,122,.35)');
-  ctx.font = '800 26px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
-  ctx.fillStyle = 'rgba(247,242,232,.7)';
-  ctx.fillText('BODY SCORE', 150, 645);
-  ctx.font = '900 66px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
-  ctx.fillStyle = '#f7f2e8';
-  ctx.fillText(`${score}/100`, 150, 715);
-
-  roundRect(ctx, 465, 590, 495, 160, 34, 'rgba(255,255,255,.1)', 'rgba(255,255,255,.22)');
-  ctx.font = '800 26px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
-  ctx.fillStyle = 'rgba(247,242,232,.7)';
-  ctx.fillText('LABEL INFO', 500, 645);
-  ctx.font = '900 34px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
-  ctx.fillStyle = '#f7f2e8';
-  wrapText(ctx, tags.slice(0, 4).join(' · ') || 'No label info yet', 500, 704, 410, 38);
-
-  let y = 840;
-  ctx.font = '800 28px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
-  ctx.fillStyle = '#b8ff7a';
-  ctx.fillText('TOP SIGNALS', 120, y);
-  y += 48;
-  effects.slice(0, 4).forEach(effect => {
-    roundRect(ctx, 120, y, 840, 70, 25, 'rgba(255,255,255,.11)', 'rgba(255,255,255,.18)');
-    ctx.font = '800 30px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
-    ctx.fillStyle = '#f7f2e8';
-    ctx.fillText(effect, 150, y + 45);
-    y += 88;
-  });
-
-  if (strain.notes) {
-    ctx.font = '700 27px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
-    ctx.fillStyle = 'rgba(247,242,232,.72)';
-    wrapText(ctx, `Notes: ${strain.notes}`.slice(0, 150), 120, 1210, 820, 34);
+  // photo
+  if (displayPhoto) {
+    try {
+      const img = await loadImageElement(displayPhoto);
+      drawImageCover(ctx, img, 760, 100, 220, 220, 30);
+      roundRect(ctx, 760, 100, 220, 220, 30, 'rgba(255,255,255,.03)', 'rgba(255,255,255,.18)');
+    } catch (error) {
+      console.warn('Could not draw strain image', error);
+    }
+  } else {
+    roundRect(ctx, 760, 100, 220, 220, 30, 'rgba(255,255,255,.06)', 'rgba(255,255,255,.16)');
+    ctx.fillStyle = 'rgba(247,242,232,.65)';
+    ctx.font = '700 24px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+    wrapText(ctx, 'Add a strain photo in Edit to show the bud on this card.', 790, 170, 160, 30);
   }
 
-  ctx.font = '700 25px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
-  ctx.fillStyle = 'rgba(247,242,232,.62)';
-  ctx.fillText('Private preference card · not medical advice', 120, h - 120);
-  const dataUrl = canvas.toDataURL('image/png');
+  // name and summary
+  ctx.fillStyle = '#f7f2e8';
+  ctx.font = '900 78px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+  wrapText(ctx, strain.name, 100, 285, 620, 82);
+
+  const nameBlockBottom = estimateWrappedBottom(ctx, strain.name, 100, 285, 620, 82);
+  ctx.font = '800 30px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+  ctx.fillStyle = '#b8ff7a';
+  const ratingLine = overallReview ? `Overall review ${overallReview}/10` : 'Overall review pending';
+  wrapText(ctx, ratingLine, 100, nameBlockBottom + 30, 620, 34);
+  ctx.font = '700 28px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+  ctx.fillStyle = 'rgba(247,242,232,.78)';
+  const metaLine = `${strain.brand || 'No brand saved'} · ${sessions.length} session${sessions.length === 1 ? '' : 's'} logged`;
+  wrapText(ctx, metaLine, 100, nameBlockBottom + 78, 620, 32);
+
+  // info cards
+  roundRect(ctx, 100, 430, 350, 150, 28, 'rgba(184,255,122,.10)', 'rgba(184,255,122,.28)');
+  ctx.font = '800 24px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+  ctx.fillStyle = 'rgba(247,242,232,.72)';
+  ctx.fillText('REVIEW AVERAGE', 130, 480);
+  ctx.font = '900 64px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+  ctx.fillStyle = '#f7f2e8';
+  ctx.fillText(overallReview ? `${overallReview}/10` : '—', 130, 548);
+
+  roundRect(ctx, 470, 430, 510, 150, 28, 'rgba(255,255,255,.08)', 'rgba(255,255,255,.20)');
+  ctx.font = '800 24px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+  ctx.fillStyle = 'rgba(247,242,232,.72)';
+  ctx.fillText('LABEL INFO', 500, 480);
+  ctx.font = '800 28px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+  ctx.fillStyle = '#f7f2e8';
+  wrapText(ctx, tags.slice(0, 4).join(' · ') || 'No label info yet', 500, 520, 430, 32);
+
+  let y = 635;
+  if (review) {
+    ctx.font = '800 26px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+    ctx.fillStyle = '#b8ff7a';
+    ctx.fillText('REVIEW BREAKDOWN', 100, y);
+    y += 36;
+    const breakdownLines = REVIEW_FIELDS.map(field => `${field.label} ${Number(review.categories[field.key] || 0).toFixed(1).replace('.0', '')}/10`);
+    breakdownLines.forEach((line, index) => {
+      roundRect(ctx, 100 + (index % 2) * 430, y + Math.floor(index / 2) * 60, 390, 46, 18, 'rgba(255,255,255,.08)', 'rgba(255,255,255,.14)');
+      ctx.font = '700 22px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+      ctx.fillStyle = '#f7f2e8';
+      ctx.fillText(line, 118 + (index % 2) * 430, y + 30 + Math.floor(index / 2) * 60);
+    });
+    y += 170;
+  }
+
+  ctx.font = '800 26px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+  ctx.fillStyle = '#b8ff7a';
+  ctx.fillText('TOP SIGNALS', 100, y);
+  y += 26;
+  effects.slice(0, 3).forEach(effect => {
+    roundRect(ctx, 100, y, 880, 62, 22, 'rgba(255,255,255,.10)', 'rgba(255,255,255,.15)');
+    ctx.font = '800 26px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+    ctx.fillStyle = '#f7f2e8';
+    ctx.fillText(effect, 128, y + 39);
+    y += 78;
+  });
+
+  if (strain.notes && y < 1180) {
+    ctx.font = '700 23px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+    ctx.fillStyle = 'rgba(247,242,232,.72)';
+    wrapText(ctx, `Notes: ${strain.notes}`.slice(0, 170), 100, Math.max(y + 10, 1090), 880, 28);
+  }
+
+  ctx.font = '700 22px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+  ctx.fillStyle = 'rgba(247,242,232,.58)';
+  ctx.fillText('Private preference card · not medical advice', 100, h - 90);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
   $('#downloadStrainCardLink').href = dataUrl;
-  $('#downloadStrainCardLink').download = `strainvault-${strain.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'strain'}-card.png`;
+  $('#downloadStrainCardLink').download = `strainvault-${slugifyName(strain.name)}-card.jpg`;
 }
 
 async function shareCurrentStrainCard() {
   const strain = state.strains.find(item => item.id === sharingStrainId);
   const canvas = $('#strainCanvas');
   if (!strain || !canvas) return;
-  renderStrainShareCard();
+  await renderStrainShareCard();
   canvas.toBlob(async blob => {
     if (!blob) {
-      toast('Could not prepare image. Use Download PNG instead.');
+      toast('Could not prepare image. Use Download JPEG instead.');
       return;
     }
-    const file = new File([blob], `strainvault-${strain.name}.png`, { type: 'image/png' });
+    const file = new File([blob], `strainvault-${slugifyName(strain.name)}.jpg`, { type: 'image/jpeg' });
     try {
       if (navigator.canShare?.({ files: [file] }) && navigator.share) {
         await navigator.share({ files: [file], title: `${strain.name} StrainVault card`, text: 'My StrainVault strain card.' });
         toast('Share sheet opened.');
       } else {
-        toast('Share files are not supported here. Use Download PNG.');
+        toast('Share files are not supported here. Use Download JPEG.');
       }
     } catch (error) {
       if (error?.name !== 'AbortError') {
         console.error(error);
-        toast('Share canceled or unavailable. Use Download PNG.');
+        toast('Share canceled or unavailable. Use Download JPEG.');
       }
     }
-  }, 'image/png');
+  }, 'image/jpeg', 0.92);
 }
 
 function renderProfileCard() {
@@ -2171,7 +2423,7 @@ function renderProfileCard() {
     ['Sessions', stats.totalSessions || '0'],
     ['Strains', stats.totalStrains || '0'],
     ['Top terpene', stats.favoriteTerpene || '—'],
-    ['Avg rating', stats.avgRating ? `${stats.avgRating.toFixed(1)}/5` : '—'],
+    ['Avg review', stats.avgRating ? `${stats.avgRating.toFixed(1)}/10` : '—'],
     ['Best for sleep', stats.sleepPick?.name || 'Needs logs'],
     ['Best for focus', stats.focusPick?.name || 'Needs logs']
   ];
@@ -2392,6 +2644,19 @@ function bindGlobalEvents() {
   $('#scanImageInput').addEventListener('change', handleScanImage);
   $('#readLabelPhotoBtn').addEventListener('click', runOcrOnScanImage);
   $('#clearScanBtn').addEventListener('click', resetScanner);
+  $('#pasteLiveTextBtn')?.addEventListener('click', async () => {
+    try {
+      const clip = await navigator.clipboard.readText();
+      if (!clip.trim()) { toast('Clipboard is empty.'); return; }
+      $('#labelText').value = clip;
+      const draft = parseLabelText(clip);
+      renderScanDraft(draft);
+      setOcrStatus('Pasted copied label text and created a review draft.');
+      toast('Live Text pasted. Review the draft.');
+    } catch (error) {
+      toast('Clipboard permission blocked. Paste the text manually into the box.');
+    }
+  });
   $('#parseLabelBtn').addEventListener('click', () => {
     const text = $('#labelText').value.trim();
     if (!text) {

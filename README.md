@@ -1,5 +1,10 @@
 # StrainVault
 
+## v3.8 Review Score Update
+
+This build adds full 1–10 strain reviews for visual appearance, smell/aroma, taste/flavor, effects, and price/value. StrainVault now calculates an automatic overall review score, shows review breakdowns on strain cards and journal entries, and includes review scoring in shareable strain cards.
+
+
 StrainVault is a mobile-first cannabis journal for privately tracking strains, sessions, effects, stash, receipts, and personalized strain insights.
 
 ## GitHub Pages deploy
@@ -51,7 +56,7 @@ For GitHub Free, GitHub Pages is available for public repositories. Private repo
 - Turned the vault into a shareable strain-card library. Each strain now has a Share card button that renders a PNG card.
 - Added Web Share API support where available, with Download PNG fallback.
 
-Note: the scanner stays local-first and does not use external OCR APIs or exposed API keys. v3.5 can load an open-source browser OCR library from a CDN when you tap **Read label photo**; the package image is processed in the browser. If the OCR library cannot load or cannot read the label, use iPhone/iPad Live Text to copy the label text and paste it into the app.
+Note: the scanner stays local-first and does not use external OCR APIs or exposed API keys. v3.8 can load an open-source browser OCR library from a CDN when you tap **Read label photo**; the package image is processed in the browser. If the OCR library cannot load or cannot read the label, use iPhone/iPad Live Text to copy the label text and paste it into the app.
 
 
 ## Version 3.1 audit/fix notes
@@ -63,19 +68,19 @@ Note: the scanner stays local-first and does not use external OCR APIs or expose
 - Added cache-busting query strings for GitHub Pages refresh reliability.
 
 
-## v3.5 Scanner Fix
+## v3.2 Scanner Fix
 - Adds Read label photo workflow with browser OCR fallback.
 - Prevents empty photo uploads from creating Untitled strain drafts.
 - Improves scanner status messages and strain-name parsing.
 
-## v3.5 Missouri Label Capture Fix Fix
+## v3.4 Missouri Label Capture Fix
 
 - Runs multiple OCR passes: cropped white test label, high-contrast cannabinoid table, package/logo area, full photo, top brand area, and inverted fallback.
 - Improves brand detection with common cannabis-brand matching and better `grown by / packaged by / manufactured by` parsing.
 - Improves THC/CBD detection from cannabis lab-table formats, including `THCA`, `Δ9 THC`, `CBDA`, `Total THC`, `Total CBD`, and `Total Cannabinoids`.
 - Calculates Total THC/CBD from acid forms when the label does not explicitly show totals.
 - Shows missing scanner fields clearly so the user can correct only what OCR could not read.
-- Updates GitHub Pages cache busting to `v=34`.
+- Updates GitHub Pages cache busting to `v=36`.
 
 
 ## v3.5 Missouri label scanner fix
@@ -97,3 +102,20 @@ This build improves the scanner review draft for cannabis package labels like th
 - usage/effect instructions when readable
 
 The app now runs extra OCR passes over the label header, exact potency table, terpene table, and approval/strain-name area, then shows all captured fields for review before saving.
+
+
+## v3.8 Scanner accuracy update
+
+- Adds strict scanner review mode so weak OCR guesses are not saved as facts.
+- Adds Paste copied Live Text support for higher-accuracy iPhone/iPad label text capture.
+- Adds editable package label fields for best-used-by date, produced-by license, testing license, testing/source tags, total weight, approval number, exact potency table, terpene profile, and instructions.
+- Saves corrected structured label facts with each strain card.
+
+
+## v3.8 audited fix
+
+- Hardened save/export encoding for larger local photo data.
+- Preserved terpene text such as mg/serving without splitting it into bad library tags.
+- Improved exact potency handling for Delta-9/D9-THC labels.
+- Preserved manually corrected scanner THC/CBD values inside saved label facts.
+- Re-ran static checks, parser tests, manifest validation, and zip integrity checks.

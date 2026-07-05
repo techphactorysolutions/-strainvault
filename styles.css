@@ -1082,3 +1082,135 @@ input[type="range"] {
     grid-template-columns: 1fr;
   }
 }
+
+/* v3.6 1-10 review scoring */
+.glass-lite {
+  border: 1px solid rgba(255,255,255,.13);
+  background: rgba(255,255,255,.055);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+}
+.review-panel {
+  padding: 14px;
+  border-radius: 24px;
+  display: grid;
+  gap: 10px;
+}
+.review-headline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.review-headline h3 {
+  margin: 0;
+  letter-spacing: -.03em;
+}
+.review-total-pill,
+.review-overall {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(184,255,122,.35);
+  background: linear-gradient(135deg, rgba(82,242,139,.18), rgba(255,209,102,.16));
+  color: var(--text);
+  font-size: .78rem;
+  font-weight: 900;
+  padding: 8px 11px;
+  white-space: nowrap;
+}
+.review-grid input {
+  font-size: 1rem;
+  font-weight: 850;
+  text-align: center;
+}
+.review-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 20px;
+  background: rgba(255,255,255,.055);
+  border: 1px solid rgba(255,255,255,.1);
+}
+.review-summary strong {
+  display: block;
+  margin-bottom: 7px;
+}
+.review-overall {
+  min-width: 74px;
+  min-height: 58px;
+  font-size: 1rem;
+}
+.review-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+.review-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: .75rem;
+  font-weight: 800;
+  color: var(--text);
+  background: rgba(157,124,255,.13);
+  border: 1px solid rgba(255,255,255,.12);
+}
+.review-chip:nth-child(2n) {
+  background: rgba(82,242,139,.12);
+}
+.review-chip:nth-child(3n) {
+  background: rgba(255,209,102,.12);
+}
+@media (max-width: 560px) {
+  .review-headline,
+  .review-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .review-overall {
+    min-width: 0;
+    min-height: 0;
+  }
+}
+
+
+/* v3.7 scanner accuracy / review mode */
+.scanner-warning {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(255, 214, 102, .12);
+  border: 1px solid rgba(255, 214, 102, .24);
+  color: rgba(255, 245, 204, .95);
+}
+.scanner-warning p {
+  margin: 0;
+  font-size: .88rem;
+  line-height: 1.35;
+}
+.scanner-review-box {
+  padding: 14px;
+  border-radius: 22px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.055);
+}
+.scanner-review-box summary {
+  cursor: pointer;
+  font-weight: 850;
+  color: var(--cream);
+  margin-bottom: 12px;
+}
+.label-facts-grid {
+  margin-bottom: 12px;
+}
+.scanner-text-actions .primary-btn,
+.scanner-text-actions .ghost-btn {
+  min-height: 52px;
+}
